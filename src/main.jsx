@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.8';
+const APP_VERSION='v4.0';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
   const d=new Date(value);
@@ -293,81 +293,120 @@ function App(){
     return a.length>=2 && a.length<=85 && !/^\[|à trouver|information à revoir/i.test(a);
   };
 
+  const actorKind=(value='',item={})=>{
+    const a=cleanAnswerText(value);
+    const low=a.toLowerCase();
+    if(/\b(ministre|président|présidente|député|députée|secrétaire d['’]état|bourgmestre|commissaire|coach|entraîneur|acteur|actrice|chanteur|chanteuse)\b/.test(low)) return 'person';
+    if(/\b(gouvernement|parlement|commission|parti|police|armée|aéroport|airport|skeyes|eurocontrol|université|banque|club|fédération|entreprise|groupe|compagnie|association|syndicat|onu|otan|ue|commission européenne)\b/.test(low)) return 'organisation';
+    if(item?.category==='Culture' && /album|groupe|festival|label|film|série/i.test(`${item?.title||''} ${a}`)) return 'organisation';
+    const caps=(a.match(/\b[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+\b/g)||[]).length;
+    if(caps>=2 && caps<=4 && !/album|festival|airways|airlines|airport|university|company|belgium/i.test(a)) return 'person';
+    return 'organisation';
+  };
+  const clipDecision=(value='',max=125)=>{
+    let x=cleanAnswerText(value)
+      .replace(/^['"“”]+|['"“”]+$/g,'')
+      .replace(/\s+(?:selon|d'après)\s+.+$/i,'')
+      .replace(/\s*\([^)]*VID[ÉE]O[^)]*\)\s*$/i,'')
+      .trim();
+    if(x.length>max){
+      const cut=x.slice(0,max);
+      x=cut.slice(0,Math.max(cut.lastIndexOf(' '),80)).trim()+'…';
+    }
+    return x;
+  };
   const makeFact=(item)=>{
-    // v3.4 : si l'article ne permet pas une question nette avec une réponse vérifiable,
-    // il n'entre pas dans le test de Mr Gras. Pas de question vague pour remplir artificiellement 12 cartes.
+    // v4.0 : la question doit pouvoir se lire seule. On ne génère plus de formulations
+    // génériques du type « quel acteur dans cette actualité ? » ni de réponses hétérogènes.
     if(!item?.title || badQuizTitle(item.title)) return null;
     if(item.quizPrompt && item.quizAnswer && validShortAnswer(item.quizAnswer)){
-      return {question:item.quizPrompt,answer:cleanAnswerText(item.quizAnswer),type:'text',answerKind:'event',quality:8};
+      return {question:item.quizPrompt,answer:cleanAnswerText(item.quizAnswer),type:'text',answerKind:'event',quality:10};
     }
     const t=cleanTitle(item.title||'');
-    const d=(item.summaryShort||item.description||'').replace(/\s+/g,' ').trim();
     let m;
 
-    // Citation + personnalité clairement nommée : on teste la personne, pas la citation.
-    if((m=t.match(/(?:premiers?|premières?)\s+mots?\s+de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:aux|à l['’]|au)\s+([^()–—:]{3,60})/i))){
-      const person=cleanAnswerText(m[1]), group=cleanAnswerText(m[2]);
-      return {question:`Quelle personnalité a livré ses premiers mots ${/^(diables|red|équipe)/i.test(group)?'aux':'à'} ${group} dans cette actualité ?`,answer:person,type:'entity',answerKind:'person',quality:9};
+    // Relations diplomatiques : formulation autonome et testable.
+    if((m=t.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][^,:;]{1,34}?)\s+et\s+([A-ZÀ-ÖØ-Ý][^,:;]{1,34}?)\s+(rétablissent|rompent|signent|annoncent|concluent|adoptent|ouvrent|ferment)\s+(.+)$/i))){
+      const a=cleanAnswerText(m[1]), b=cleanAnswerText(m[2]), action=m[3].toLowerCase(), object=clipDecision(m[4],90);
+      if(validShortAnswer(a)&&validShortAnswer(b)) return {question:`Quels deux acteurs ${action} ${object||'cette mesure'} ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:10};
     }
 
-    // Grèves / mouvements sociaux : acteur ou lieu structurant, jamais micro-chiffres.
-    if((m=t.match(/(?:gr[eè]ve|mouvement social|arr[eê]t de travail).*?\bchez\s+([^:;,–—-]{2,55})/i))){
-      const actor=cleanAnswerText(m[1]);
-      if(validShortAnswer(actor)) return {question:`Quelle entreprise ou organisation est directement concernée par la grève évoquée dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:9};
-    }
-    if((m=t.match(/\ba[ée]roport de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ -]{2,35})/))){
-      const place=cleanAnswerText(m[1].replace(/\s+(?:pr[eé]voit|annonce|sera|est|a)\b.*$/i,''));
-      if(validShortAnswer(place)) return {question:`Quel aéroport belge est directement concerné par cette actualité ?`,answer:place,type:'entity',answerKind:'place',quality:8};
+    // Titre « contexte : fait ». Le fait après les deux-points est prioritaire.
+    const parts=t.split(':');
+    const prefix=parts.length>1?parts[0].trim():'';
+    const core=(parts.length>1?parts.slice(1).join(':').trim():t).replace(/^['"“”]+|['"“”]+$/g,'').trim();
+
+    // Personne/organisation qui annonce, propose, confirme, dément, réclame, décide, etc.
+    if((m=core.match(/^(.{2,70}?)\s+(annonce|annoncent|propose|proposent|confirme|confirment|dément|démentent|réclame|réclament|demande|demandent|décide|décident|adopte|adoptent|approuve|approuvent|rejette|rejettent|suspend|suspendent|supprime|suppriment|autorise|autorisent|interdit|interdisent|lance|lancent|présente|présentent|dévoile|dévoilent|publie|publient|rouvre|rouvrent|ferme|ferment|signe|signent)\s+(.+)$/i))){
+      let actor=cleanAnswerText(m[1]).replace(/^(?:la|le|les|l['’])\s+/i,'').trim();
+      const verb=m[2].toLowerCase(); const decision=clipDecision(m[3]);
+      if(validShortAnswer(actor)&&decision.length>=8 && !/^(du|de la|un|une)\s+(changement|nouveau|nouvelle|rebondissement)/i.test(actor)){
+        const kind=actorKind(actor,item);
+        let q;
+        if(kind==='person') q=`Qui ${verb} ${decision} ?`;
+        else q=`Quelle organisation ${verb} ${decision} ?`;
+        return {question:q,answer:actor,type:'entity',answerKind:kind,quality:10};
+      }
     }
 
-    // Prix / récompenses / victoires : format très proche d'un vrai QCM d'actu.
+    // Même logique si l'acteur est placé avant les deux-points.
+    if(prefix && (m=prefix.match(/^(.{2,65}?)\s+(annonce|propose|confirme|dément|réclame|demande|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit|lance|présente|dévoile|publie|rouvre|ferme|signe)\s+(.+)$/i))){
+      const actor=cleanAnswerText(m[1]).replace(/^(?:la|le|les|l['’])\s+/i,'').trim();
+      const verb=m[2].toLowerCase(); const decision=clipDecision(m[3]);
+      if(validShortAnswer(actor)&&decision.length>=8){
+        const kind=actorKind(actor,item);
+        return {question:`${kind==='person'?'Qui':'Quelle organisation'} ${verb} ${decision} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
+      }
+    }
+
+    // « X sur Y : citation » → on teste X avec un sujet explicite.
+    if((m=t.match(/^(.{2,60}?)\s+sur\s+([^:]{6,100})\s*:/i))){
+      const actor=cleanAnswerText(m[1]), subject=clipDecision(m[2],90);
+      if(validShortAnswer(actor)&&subject.length>5){
+        const kind=actorKind(actor,item);
+        return {question:`${kind==='person'?'Qui s’est exprimé':'Quelle organisation s’est exprimée'} sur ${subject.toLowerCase()} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
+      }
+    }
+
+    // « Il y a accord : Loubna Azghoud annonce... » et variantes : le motif peut rester dans le titre complet.
+    if((m=t.match(/(?:^|:\s*)([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(annonce|confirme|dément|propose|réclame|demande)\s+(.+)$/i))){
+      const person=cleanAnswerText(m[1]), verb=m[2].toLowerCase(), object=clipDecision(m[3]);
+      if(validShortAnswer(person)&&object.length>=8) return {question:`Qui ${verb} ${object} ?`,answer:person,type:'entity',answerKind:'person',quality:10};
+    }
+
+    // Prix / récompenses / victoires : question centrée sur l'information réellement mémorisable.
     if((m=t.match(/^(.+?)\s+(?:remporte|gagne|reçoit|décroche|obtient)\s+(.+)$/i))){
-      const subject=cleanAnswerText(m[1]), prize=cleanAnswerText(m[2]);
-      if(validShortAnswer(prize)) return {question:`Quelle récompense, distinction ou victoire est associée à « ${subject} » ?`,answer:prize,type:'text',answerKind:'award',quality:9};
+      const subject=cleanAnswerText(m[1]), prize=clipDecision(m[2],105);
+      if(validShortAnswer(subject)&&prize.length>=4) return {question:`Quelle récompense ou distinction ${subject} a-t-il obtenue ?`,answer:prize,type:'text',answerKind:'award',quality:10};
     }
 
     // Nominations / nouvelles fonctions.
     if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient|est élu|est élue|est désigné|est désignée)\s+(.+)$/i))){
-      const person=cleanAnswerText(m[1]), role=cleanAnswerText(m[2]);
-      if(validShortAnswer(person)&&validShortAnswer(role)) return {question:`Quelle nouvelle fonction ou responsabilité est attribuée à ${person} ?`,answer:role,type:'text',answerKind:'role',quality:9};
+      const person=cleanAnswerText(m[1]), role=clipDecision(m[2],100);
+      if(validShortAnswer(person)&&role.length>=4) return {question:`Quelle fonction ou responsabilité ${person} obtient-il dans cette actualité ?`,answer:role,type:'text',answerKind:'role',quality:10};
     }
 
-    // Relations diplomatiques ou accords entre deux acteurs clairement identifiés.
-    if((m=t.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][^,:;]{1,35}?)\s+et\s+([A-ZÀ-ÖØ-Ý][^,:;]{1,35}?)\s+(rétablissent|signent|annoncent|concluent|adoptent|lancent|décident|ouvrent|ferment)\b/i))){
-      const a=cleanAnswerText(m[1]), b=cleanAnswerText(m[2]), action=m[3].toLowerCase();
-      if(validShortAnswer(a)&&validShortAnswer(b)) return {question:`Quels sont les deux acteurs directement concernés par l'actualité où ils ${action} une mesure ou un accord ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:9};
-    }
-
-    // Après un contexte avant « : », on analyse le fait principal séparément.
-    const core=(t.includes(':')?t.split(':').slice(1).join(':').trim():t).replace(/^['"“”]+|['"“”]+$/g,'').trim();
-
-    // « L'Iran a communiqué / annoncé / décidé... » -> qui ?
-    if((m=core.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ .-]{2,45}?)\s+(?:a |ont )?(communiqué|annoncé|annoncent|décidé|décident|adopté|adoptent|confirmé|confirment|signé|signent|rouvert|rouvrent|fermé|ferment)\b/i))){
+    // Grèves : si aucune décision plus intéressante n'a été détectée, on teste l'organisation touchée.
+    if((m=t.match(/(?:gr[eè]ve|mouvement social|arr[eê]t de travail).*?\bchez\s+([^:;,–—-]{2,55})/i))){
       const actor=cleanAnswerText(m[1]);
-      if(validShortAnswer(actor)) return {question:`Quel acteur est à l'origine de l'annonce ou de la décision décrite dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
+      if(validShortAnswer(actor)) return {question:`Quelle organisation est touchée par le mouvement de grève mentionné dans ce titre ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
     }
 
-    // Lancement / présentation : qui est à l'origine ?
-    if((m=core.match(/^(.+?)\s+(?:lance|présente|dévoile|publie)\s+(.+)$/i))){
-      const actor=cleanAnswerText(m[1]), object=cleanAnswerText(m[2]);
-      if(validShortAnswer(actor)&&object.length>=8) return {question:`Qui est à l’origine de « ${object} » ?`,answer:actor,type:'entity',answerKind:'organisation',quality:9};
+    // Aéroport : uniquement si le lieu est réellement le fait distinctif.
+    if((m=t.match(/\ba[ée]roport de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ -]{2,35})/))){
+      const place=cleanAnswerText(m[1].replace(/\s+(?:pr[eé]voit|annonce|sera|est|a|fait)\b.*$/i,''));
+      if(validShortAnswer(place)) return {question:`Quel aéroport belge est concerné par cette perturbation du trafic aérien ?`,answer:place,type:'entity',answerKind:'place',quality:8};
     }
 
-    // Décision / annonce avec acteur simple. On rejette les débuts éditoriaux (« du changement... »).
-    if((m=core.match(/^(.+?)\s+(?:annonce|confirme|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit)\s+(.+)$/i))){
-      const actor=cleanAnswerText(m[1]), decision=cleanAnswerText(m[2]);
-      if(validShortAnswer(actor) && actor.length<=55 && !/^(du|de la|un|une)\s+(changement|nouveau|nouvelle|rebondissement)/i.test(actor) && decision.length>=10){
-        return {question:`Quel acteur a annoncé ou pris la décision décrite dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
+    // Lancement / publication : utile pour culture, tech, économie.
+    if((m=t.match(/^(.+?)\s+(?:lance|présente|dévoile|publie)\s+(.+)$/i))){
+      const actor=cleanAnswerText(m[1]), object=clipDecision(m[2]);
+      if(validShortAnswer(actor)&&object.length>=8){
+        const kind=actorKind(actor,item);
+        return {question:`${kind==='person'?'Qui':'Quelle organisation'} est à l’origine de ${object} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
       }
     }
 
-    // Arrivée / départ d'une personne : on teste la personne ou l'organisation si le titre est explicite.
-    if((m=core.match(/(?:arrivée|arrive|rejoint)\s+(?:de\s+)?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:chez|à|au)\s+([^,;:–—]{2,50})/i))){
-      const person=cleanAnswerText(m[1]), org=cleanAnswerText(m[2]);
-      if(validShortAnswer(person)&&validShortAnswer(org)) return {question:`Quelle personnalité rejoint ${org} dans cette actualité ?`,answer:person,type:'entity',answerKind:'person',quality:8};
-    }
-
-    // Pas de fallback « Que faut-il retenir ? ». Si on ne sait pas poser une question précise, on saute l'article.
     return null;
   };
   const withLead=(item,fact)=> fact ? ({...fact,lead:questionLead(item,fact.answer)}) : null;
@@ -473,13 +512,15 @@ function App(){
 
   const buildDeck=(count=20,mode='gras')=>{
     setPhotoDeckMessage('');
-    const base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
+    let base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
+    if(mode==='essential') base=base.filter(n=>testImportance(n)>=5);
+
     if(!base.length) return;
     // On évite à la fois les mêmes ARTICLES et les mêmes SUJETS vus récemment.
     let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url) && !recentTopicKeys.includes(topicKey(n)));
     if(pool.length<Math.min(count*2,base.length)) pool=base.filter(n=>!recentTopicKeys.includes(topicKey(n)));
     if(pool.length<Math.min(count,base.length)) pool=base;
-    const items=pickDiverseItems(pool,Math.min(Math.max(count*5,60),pool.length),[],recentTopicKeys.slice(-18));
+    const items=pickDiverseItems(pool,Math.min(Math.max(count*7,100),pool.length),[],recentTopicKeys.slice(-10));
     const facts=items.map(item=>{const fact=withLead(item,makeFact(item));return fact?{item,...fact,topicKey:topicKey(item)}:null}).filter(Boolean);
     let cards;
     if(mode==='leconte'){
@@ -487,7 +528,9 @@ function App(){
     }else{
       // Une seule question par sujet dans la session, même si plusieurs médias parlent du même événement.
       const seenTopics=new Set();
-      const reliable=shuffle(facts.filter(x=>x.quality>=8)).filter(f=>{
+      let candidateFacts=facts.filter(x=>x.quality>=8);
+      if(mode==='people') candidateFacts=candidateFacts.filter(x=>x.answerKind==='person');
+      const reliable=shuffle(candidateFacts).filter(f=>{
         if(!f.topicKey || seenTopics.has(f.topicKey)) return false;
         seenTopics.add(f.topicKey); return true;
       });
@@ -651,11 +694,11 @@ function App(){
 
       {tab==='Révisions'&&<section className="noTop">
         <div className="revisionIntro"><div><p className="eyebrow">Révision intelligente</p><h2>Choisis ton mode</h2><p>Les exercices portent sur le contenu de l’actualité, jamais sur le nom du média qui a publié l’article.</p></div></div>
-        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(20,'gras')}}><span>JUSQU’À 20 QUESTIONS · 1 SUJET = 1 QUESTION</span><strong>Session Mr Gras</strong><small>Sujets variés, sans répétition de la même actualité dans la session</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
+        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(20,'gras')}}><span>JUSQU’À 20 QUESTIONS · 1 SUJET = 1 QUESTION</span><strong>Session Mr Gras</strong><small>QCM et questions précises sur des sujets différents</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(15,'essential')}}><span>15 QUESTIONS PRIORITAIRES</span><strong>Si j’avais un test demain</strong><small>Uniquement les sujets les plus importants de ta période</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(10,'people')}}><span>PERSONNALITÉS</span><strong>Qui est qui ?</strong><small>Noms, fonctions et personnes au cœur de l’actualité</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>Jusqu’à 12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>Jusqu’à 20 questions · Mr Gras</button><button className="secondary" onClick={()=>buildDeck(15,'essential')}>Test demain</button><button className="secondary" onClick={()=>buildDeck(10,'people')}>Personnalités</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
         {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
@@ -667,17 +710,17 @@ function App(){
             <h3>Quelle actualité cette photo représente-t-elle ?</h3>
             <p className="hint">Explique le fait, les personnes ou institutions concernées et le contexte en quelques lignes.</p>
             <textarea value={photoAnswer} onChange={e=>setPhotoAnswer(e.target.value)} placeholder="Ta réponse…"/>
-            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{displaySummaries(c.item).long||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:c.kind==='mcq'?<>
             <span className="cardCategory">{c.item.category}</span>
             <h3>{c.question}</h3>
             <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
-            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p><p>{displaySummaries(c.item).long}</p><div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
             {c.lead&&<div className="questionContext"><span>Contexte de la question</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
-            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3><p>{displaySummaries(c.item).long}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
