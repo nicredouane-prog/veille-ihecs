@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v4.5';
+const APP_VERSION='v4.7';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
   const d=new Date(value);
@@ -15,6 +15,23 @@ const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
 const daysBetween = (a,b) => Math.max(0,Math.ceil((new Date(b)-new Date(a))/86400000));
 const safeJson = (k,fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
+
+const articleTime = item => {
+  const t=Date.parse(item?.date||'');
+  return Number.isFinite(t)?t:0;
+};
+const articleKey = item => String(item?.url||`${item?.source||''}|${item?.title||''}`).toLowerCase().trim();
+function mergeArticleLists(...lists){
+  const map=new Map();
+  for(const item of lists.flat()){
+    if(!item?.title) continue;
+    const key=articleKey(item);
+    if(!key) continue;
+    const prev=map.get(key);
+    if(!prev || articleTime(item)>=articleTime(prev)) map.set(key,item);
+  }
+  return [...map.values()].sort((a,b)=>articleTime(b)-articleTime(a));
+}
 
 
 const tidyHeadline=(value='')=>value
@@ -87,7 +104,7 @@ function App(){
   const [tab,setTab]=useState('Accueil');
   const [tests,setTests]=useState(()=>safeJson('veille-tests',{qcm:'2026-09-21',photo:'2026-09-05'}));
   const [history,setHistory]=useState(()=>safeJson('veille-history',[]));
-  const [news,setNews]=useState([]);
+  const [news,setNews]=useState(()=>safeJson('ihecs-news-cache',[]));
   const [manualNews,setManualNews]=useState(()=>safeJson('veille-manual-news',[]));
   const [sharedNews,setSharedNews]=useState([]);
   const [addUrl,setAddUrl]=useState('');
@@ -139,6 +156,7 @@ function App(){
   useEffect(()=>localStorage.setItem('veille-saved',JSON.stringify(saved)),[saved]);
   useEffect(()=>localStorage.setItem('veille-manual-news',JSON.stringify(manualNews)),[manualNews]);
   useEffect(()=>localStorage.setItem('veille-media-access',JSON.stringify(mediaAccess)),[mediaAccess]);
+  useEffect(()=>{ try{ localStorage.setItem('ihecs-news-cache',JSON.stringify(news.slice(0,1500))); }catch{} },[news]);
   useEffect(()=>localStorage.setItem('veille-reminder-time',reminderTime),[reminderTime]);
   useEffect(()=>localStorage.setItem('veille-reminder-enabled',reminderEnabled?'1':'0'),[reminderEnabled]);
   useEffect(()=>localStorage.setItem('veille-date-filter',dateFilter),[dateFilter]);
@@ -174,10 +192,13 @@ function App(){
     try{
       const qs=new URLSearchParams();
       if(since) qs.set('since',since); else qs.set('days','180');
+      qs.set('_refresh',String(Math.floor(Date.now()/60000)));
       const r=await fetch(`/api/news?${qs.toString()}`,{cache:'no-store'});
       if(!r.ok) throw new Error(`Erreur ${r.status}`);
       const data=await r.json();
-      setNews(data.items||[]); setSourceStatus(data.sources||[]);
+      // On fusionne au lieu de remplacer : un article fraîchement vu ne disparaît plus
+      // si Google News/RSS le retire momentanément de son flux au rafraîchissement suivant.
+      setNews(prev=>mergeArticleLists(prev,data.items||[]).slice(0,4500)); setSourceStatus(data.sources||[]);
       setLastUpdatedAt(data.generatedAt||new Date().toISOString());
       lastFetchRef.current=Date.now();
       try{
@@ -218,9 +239,9 @@ function App(){
   };
 
   const combinedNews=useMemo(()=>{
-    const all=[...manualNews,...sharedNews,...news];
-    const seen=new Set();
-    return all.filter(n=>{ const k=(n.url||n.title||n.id).toLowerCase(); if(seen.has(k)) return false; seen.add(k); return true; });
+    // Une seule source de vérité pour l'ordre : date/heure de publication décroissante.
+    // Les ajouts manuels/partagés ne peuvent plus casser l'ordre chronologique du flux.
+    return mergeArticleLists(manualNews,sharedNews,news);
   },[manualNews,sharedNews,news]);
 
   const activeSince=useMemo(()=>{
@@ -256,7 +277,7 @@ function App(){
     const q=query.toLowerCase().trim();
     const dateOk=!filterSince || (n.date||'').slice(0,10)>=filterSince;
     return dateOk && (category==='Toutes'||n.category===category) && (!q||`${n.title} ${n.description} ${n.source}`.toLowerCase().includes(q));
-  }),[combinedNews,query,category,filterSince]);
+  }).sort((a,b)=>articleTime(b)-articleTime(a)),[combinedNews,query,category,filterSince]);
   useEffect(()=>setVisibleLimit(60),[query,category,dateFilter,customSince]);
 
   const relatedToSelected=useMemo(()=>{

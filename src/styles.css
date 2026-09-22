@@ -164,3 +164,64 @@
   .articleReader .modalActions{position:sticky;bottom:0;z-index:7;background:linear-gradient(to top,#f8f6f1 82%,rgba(248,246,241,.92));margin:20px -16px -92px;padding:16px 16px calc(18px + env(safe-area-inset-bottom));border-top:1px solid #ded8cf}
   .articleReader .modalActions a,.articleReader .modalActions button{min-height:48px;display:grid;place-items:center}
 }
+
+
+/* v4.6 — lecteur mobile : actions non flottantes + barre de navigation propre */
+@media(max-width:720px){
+  .articleReader{position:relative;padding-top:12px!important}
+  .articleReaderTop{
+    position:sticky;
+    top:-12px;
+    z-index:8;
+    display:grid;
+    grid-template-columns:44px minmax(0,1fr) 44px;
+    align-items:center;
+    gap:10px;
+    width:calc(100% - 52px);
+    margin:0 52px 14px 0;
+    padding:10px 0 9px;
+    background:rgba(248,246,241,.98);
+    backdrop-filter:blur(10px);
+  }
+  .readerArrow{width:42px;height:42px;min-width:42px;min-height:42px}
+  .readerPosition{min-width:0;overflow:hidden}
+  .readerPosition strong{font-size:12px}
+  .readerPosition span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px}
+  .articleReader .close{
+    position:absolute!important;
+    top:18px!important;
+    right:14px!important;
+    float:none!important;
+    margin:0!important;
+    width:42px;
+    height:42px;
+    z-index:12;
+    background:#fefdf9;
+    border:1px solid #d8d2c8;
+    border-radius:50%;
+    display:grid;
+    place-items:center;
+  }
+  .articleReader .modalMeta{clear:none;padding-top:0}
+
+  /* Les actions restent à leur place dans l'article : elles ne masquent plus le contenu. */
+  .articleReader .modalActions{
+    position:static!important;
+    margin:24px 0 0!important;
+    padding:0!important;
+    border-top:0!important;
+    background:transparent!important;
+  }
+  .articleReader .modalActions a,.articleReader .modalActions button{
+    min-height:50px;
+    display:grid;
+    place-items:center;
+  }
+  .articleReader .topicFollow{padding-bottom:0}
+}
+
+@media(max-width:380px){
+  .articleReaderTop{grid-template-columns:40px minmax(0,1fr) 40px;width:calc(100% - 48px);margin-right:48px;gap:6px}
+  .readerArrow{width:40px;height:40px;min-width:40px;min-height:40px}
+  .readerPosition span{font-size:9px}
+}

@@ -86,7 +86,7 @@ function windowsFor(startMs,endMs){
 }
 
 export default async function handler(req,res){
-  res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=180');
+  res.setHeader('Cache-Control','s-maxage=30, stale-while-revalidate=30');
   const requestedSince=String(req.query?.since||'').match(/^\d{4}-\d{2}-\d{2}$/)?.[0]||'';
   const days=Math.max(1,Math.min(365,Number(String(req.query?.days||'180'))||180));
   const since=requestedSince ? new Date(`${requestedSince}T00:00:00Z`).getTime() : Date.now()-days*86400000;
