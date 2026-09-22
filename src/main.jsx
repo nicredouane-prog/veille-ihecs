@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.2';
+const APP_VERSION='v3.3';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -78,6 +78,7 @@ function App(){
   const [deckIndex,setDeckIndex]=useState(0);
   const [flashRevealed,setFlashRevealed]=useState(false);
   const [deckStats,setDeckStats]=useState({ok:0,review:0});
+  const [recentTestIds,setRecentTestIds]=useState(()=>JSON.parse(localStorage.getItem('ihecs-recent-test-ids')||'[]'));
   const [photoAnswer,setPhotoAnswer]=useState('');
   const [photoDeckLoading,setPhotoDeckLoading]=useState(false);
   const [photoDeckMessage,setPhotoDeckMessage]=useState('');
@@ -182,6 +183,8 @@ function App(){
     }
     return out;
   };
+  useEffect(()=>localStorage.setItem('ihecs-recent-test-ids',JSON.stringify(recentTestIds.slice(-30))),[recentTestIds]);
+
   const questionLead=(item,answer='')=>{
     const masked=maskAnswer(item?.title||'',answer);
     if(masked && masked!==cleanTitle(item?.title||'')) return masked;
@@ -232,7 +235,7 @@ function App(){
     // Décision / annonce : acteur identifiable.
     if((m=t.match(/^(.+?)\s+(?:annonce|confirme|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit)\s+(.+)$/i))){
       const actor=m[1].trim(), decision=m[2].trim();
-      if(actor.length<=70) return {question:`Quel acteur est à l’origine de la décision suivante : « ${decision} » ?`,answer:actor,type:'entity',answerKind:'organisation',quality:6};
+      if(actor.length<=70) return {question:`Quelle organisation a annoncé cette décision ou ce changement ?`,answer:actor,type:'entity',answerKind:'organisation',quality:6};
     }
 
     // « X : ... » → sujet clairement identifié. On demande le fait associé, jamais « quelle actu ? » sans repère.
@@ -252,37 +255,92 @@ function App(){
   };
   const withLead=(item,fact)=>({...fact,lead:questionLead(item,fact.answer)});
 
-  const shuffle=(arr)=>[...arr].sort(()=>Math.random()-.5);
+  const shuffle=(arr)=>{
+    const out=[...arr];
+    for(let i=out.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [out[i],out[j]]=[out[j],out[i]];
+    }
+    return out;
+  };
+  const shortOption=(v='')=>{
+    const x=String(v).replace(/[«»“”]/g,'').replace(/\s+/g,' ').trim();
+    if(!x || x.length>55) return '';
+    if(/[.!?;:]/.test(x.slice(0,-1))) return '';
+    return x;
+  };
+  const curatedDistractors=(fact)=>{
+    const q=(fact.question||'').toLowerCase();
+    const a=(fact.answer||'').toLowerCase();
+    if(q.includes('aéroport')) return ['Brussels Airport','Aéroport de Liège','Aéroport d’Ostende','Aéroport de Charleroi'].filter(x=>x.toLowerCase()!==a);
+    if(q.includes('entreprise')||q.includes('organisation')){
+      if(/orange|digi|proximus|telenet|télécom|telecom/.test((fact.item?.title||'')+' '+a)) return ['Orange Belgium','Proximus','Telenet','Digi Belgium'].filter(x=>x.toLowerCase()!==a);
+      if(/skeyes|aéroport|aviation|vol/.test((fact.item?.title||'')+' '+a)) return ['Skeyes','Brussels Airport Company','Eurocontrol','Ryanair'].filter(x=>x.toLowerCase()!==a);
+    }
+    return [];
+  };
   const buildOptions=(fact,facts)=>{
     if(!['entity','entity-pair','text'].includes(fact.type)) return [];
+    const answer=shortOption(fact.answer);
+    if(!answer) return [];
+    const curated=curatedDistractors(fact).map(shortOption).filter(Boolean);
     const sameKind=facts
-      .filter(x=>x!==fact && x.answer && x.answer!==fact.answer && x.answerKind===fact.answerKind && ['entity','entity-pair','text'].includes(x.type))
-      .map(x=>x.answer);
-    const broad=facts
-      .filter(x=>x!==fact && x.answer && x.answer!==fact.answer && x.type===fact.type)
-      .map(x=>x.answer);
-    const pool=[...sameKind,...broad].filter(x=>x && x.length<170);
-    const unique=[...new Set(pool)];
+      .filter(x=>x!==fact && x.answerKind===fact.answerKind)
+      .map(x=>shortOption(x.answer))
+      .filter(x=>x && x.toLowerCase()!==answer.toLowerCase());
+    const unique=[...new Set([...curated,...sameKind])].filter(x=>x.toLowerCase()!==answer.toLowerCase());
     if(unique.length<3) return [];
-    return shuffle([fact.answer,...shuffle(unique).slice(0,3)]);
+    return shuffle([answer,...shuffle(unique).slice(0,3)]);
+  };
+
+  const pickDiverseItems=(pool,count,excludeIds=[])=>{
+    const excluded=new Set(excludeIds);
+    const available=shuffle(pool.filter(n=>n.title && !excluded.has(n.id||n.url)));
+    const chosen=[];
+    const sourceCounts=new Map();
+    const categoryCounts=new Map();
+    for(const item of available){
+      const src=item.source||'Autre', cat=item.category||'Autre';
+      if((sourceCounts.get(src)||0)>=2) continue;
+      if((categoryCounts.get(cat)||0)>=3) continue;
+      chosen.push(item);
+      sourceCounts.set(src,(sourceCounts.get(src)||0)+1);
+      categoryCounts.set(cat,(categoryCounts.get(cat)||0)+1);
+      if(chosen.length>=count) break;
+    }
+    if(chosen.length<count){
+      for(const item of available){
+        if(chosen.includes(item)) continue;
+        chosen.push(item);
+        if(chosen.length>=count) break;
+      }
+    }
+    return shuffle(chosen);
   };
 
   const buildDeck=(count=12,mode='gras')=>{
     setPhotoDeckMessage('');
-    const pool=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
-    if(!pool.length) return;
-    const shuffled=shuffle(pool).slice(0,Math.min(Math.max(count*6,60),pool.length));
-    const facts=shuffled.map(item=>({item,...withLead(item,makeFact(item))})).sort((a,b)=>b.quality-a.quality);
+    const base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
+    if(!base.length) return;
+    // Évite de resservir immédiatement les mêmes articles entre deux sessions.
+    let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url));
+    if(pool.length<Math.min(count*2,base.length)) pool=base;
+    const items=pickDiverseItems(pool,Math.min(Math.max(count*4,36),pool.length));
+    const facts=items.map(item=>({item,...withLead(item,makeFact(item))}));
     let cards;
     if(mode==='leconte'){
-      cards=facts.filter(x=>x.item.image).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
+      cards=shuffle(facts.filter(x=>x.item.image)).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
     }else{
-      const reliable=facts.filter(x=>x.quality>=3);
-      cards=reliable.map(fact=>{
+      const reliable=shuffle(facts.filter(x=>x.quality>=3));
+      cards=[];
+      for(const fact of reliable){
         const options=fact.quality>=6?buildOptions(fact,reliable):[];
-        return {...fact,kind:options.length===4?'mcq':'flash',options};
-      }).slice(0,Math.min(count,reliable.length));
+        cards.push({...fact,kind:options.length===4?'mcq':'flash',options});
+        if(cards.length>=count) break;
+      }
+      cards=shuffle(cards);
     }
+    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-30));
     setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizAnswer(''); setQuizResult(null); setPhotoAnswer('');
   };
   const makeQuiz=()=>buildDeck(12,'gras');
@@ -297,7 +355,10 @@ function App(){
     }catch{return null;}
   };
   const makePhotoTest=async()=>{
-    const pool=shuffle((relevantNews.length?relevantNews:combinedNews).filter(n=>n.title));
+    const base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
+    let candidates=base.filter(n=>!recentTestIds.includes(n.id||n.url));
+    if(candidates.length<10) candidates=base;
+    const pool=pickDiverseItems(candidates,Math.min(42,candidates.length));
     setPhotoDeckLoading(true); setPhotoDeckMessage('Recherche de photos d’actualité exploitables…');
     setDeck([]); setDeckIndex(0); setPhotoAnswer(''); setQuizResult(null); setFlashRevealed(false); setDeckStats({ok:0,review:0});
     const found=[];
@@ -315,7 +376,8 @@ function App(){
       }
     }
     const cards=found.slice(0,6).map(item=>{const fact=withLead(item,makeFact(item));return {item,...fact,kind:'photo'};});
-    setDeck(cards); setDeckIndex(0); setPhotoDeckLoading(false);
+    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-30));
+    setDeck(shuffle(cards)); setDeckIndex(0); setPhotoDeckLoading(false);
     setPhotoDeckMessage(cards.length?`${cards.length} photo${cards.length>1?'s':''} prête${cards.length>1?'s':''}.`:'Aucune vraie photo exploitable n’a été trouvée dans les articles chargés.');
   };
   const nextCard=(result)=>{
@@ -413,7 +475,7 @@ function App(){
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions claires sur les acteurs, décisions, fonctions, lieux, récompenses et enjeux. Chaque question rappelle l’actualité concernée sans révéler la réponse. Mr Leconte : uniquement de vraies photos trouvées dans les articles.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions factuelles et compréhensibles sur les acteurs, décisions, fonctions, lieux, récompenses et enjeux. Les articles sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
         {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
@@ -425,18 +487,18 @@ function App(){
             <h3>Quelle actualité cette photo représente-t-elle ?</h3>
             <p className="hint">Explique le fait, les personnes ou institutions concernées et le contexte en quelques lignes.</p>
             <textarea value={photoAnswer} onChange={e=>setPhotoAnswer(e.target.value)} placeholder="Ta réponse…"/>
-            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
+            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:c.kind==='mcq'?<>
             <span className="cardCategory">{c.item.category}</span>
             {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
             <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
-            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}</div>}
+            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
             {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
-            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
+            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
