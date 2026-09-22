@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.6';
+const APP_VERSION='v3.7';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -95,6 +95,7 @@ function App(){
   const [flashRevealed,setFlashRevealed]=useState(false);
   const [deckStats,setDeckStats]=useState({ok:0,review:0});
   const [recentTestIds,setRecentTestIds]=useState(()=>JSON.parse(localStorage.getItem('ihecs-recent-test-ids')||'[]'));
+  const [recentTopicKeys,setRecentTopicKeys]=useState(()=>JSON.parse(localStorage.getItem('ihecs-recent-topic-keys')||'[]'));
   const [photoAnswer,setPhotoAnswer]=useState('');
   const [photoDeckLoading,setPhotoDeckLoading]=useState(false);
   const [photoDeckMessage,setPhotoDeckMessage]=useState('');
@@ -233,7 +234,8 @@ function App(){
     }
     return out;
   };
-  useEffect(()=>localStorage.setItem('ihecs-recent-test-ids',JSON.stringify(recentTestIds.slice(-30))),[recentTestIds]);
+  useEffect(()=>localStorage.setItem('ihecs-recent-test-ids',JSON.stringify(recentTestIds.slice(-60))),[recentTestIds]);
+  useEffect(()=>localStorage.setItem('ihecs-recent-topic-keys',JSON.stringify(recentTopicKeys.slice(-40))),[recentTopicKeys]);
 
   const questionLead=(item,answer='')=>{
     const title=cleanTitle(item?.title||'');
@@ -375,45 +377,87 @@ function App(){
     return shuffle([answer,...shuffle(unique).slice(0,3)]);
   };
 
-  const pickDiverseItems=(pool,count,excludeIds=[])=>{
+
+  const lowValueForTest=(item)=>{
+    const t=`${item?.title||''} ${item?.description||''}`.toLowerCase();
+    // Faits divers / contenus très locaux ou anecdotiques : on les laisse dans Actualités,
+    // mais on ne les utilise pas pour les tests d'actualité générale de Mr Gras.
+    return /disparition|avis de recherche|personne disparue|accident de la route|fait divers|incendie d'habitation|vol à l'étalage|braquage|meurtre|agression|météo|horoscope|loterie|euromillions|lotto|photo extraordinaire|insolite|buzz|people|carnet rose/.test(t);
+  };
+  const majorTopicHints=[
+    'ryanair','skeyes','charleroi','brussels airport','rwanda','iran','ormuz','ukraine','russie','gaza','israel','otan','onu','trump','etats-unis','union europeenne','commission europeenne','gouvernement','parlement','budget','inflation','sncb','enseignement','migration','asile','proximus','orange','digi','telenet','diables rouges','uefa','fifa','festival','cannes','venise','milan','oscar','palme','nobel','intelligence artificielle','openai','anthropic','mistral'
+  ];
+  const normalizeTopicText=(v='')=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+  const topicKey=(item)=>{
+    const text=normalizeTopicText(`${item?.title||''} ${item?.summaryShort||''}`);
+    const hits=majorTopicHints.filter(h=>text.includes(normalizeTopicText(h)));
+    if(hits.length) return hits.slice(0,2).join('|');
+    const tokens=[...topicTokens(item)].filter(x=>x.length>=5 && !/belgique|actualite|annonce|nouveau|nouvelle|video|photo/.test(x));
+    return tokens.slice(0,3).sort().join('|') || normalizeTopicText(item?.title||'').slice(0,48);
+  };
+  const testImportance=(item)=>{
+    if(lowValueForTest(item)) return -100;
+    const t=normalizeTopicText(`${item?.title||''} ${item?.description||''}`);
+    let score=0;
+    if(['Politique','International','Économie','Sciences','Culture','Sport'].includes(item?.category)) score+=3;
+    if(/gouvernement|ministre|parlement|election|president|diplomat|guerre|iran|ukraine|russie|gaza|israel|otan|onu|commission europeenne|union europeenne|budget|inflation|reforme|greve|skeyes|sncb|aeroport|nomme|elu|prix|festival|remporte|gagne|record|champion|accord|sanction|migration|asile/.test(t)) score+=4;
+    if(/local|commune|quartier|rue|province/.test(t)) score-=1;
+    return score;
+  };
+
+  const pickDiverseItems=(pool,count,excludeIds=[],excludeTopics=[])=>{
     const excluded=new Set(excludeIds);
-    const available=shuffle(pool.filter(n=>n.title && !excluded.has(n.id||n.url)));
+    const blockedTopics=new Set(excludeTopics);
+    const available=shuffle(pool.filter(n=>n.title && !excluded.has(n.id||n.url)))
+      .sort((a,b)=>testImportance(b)-testImportance(a));
     const chosen=[];
     const sourceCounts=new Map();
     const categoryCounts=new Map();
+    const sessionTopics=new Set();
+    // Premier passage : un seul article par sujet, max 2 par source et max 3 par catégorie.
     for(const item of available){
+      const key=topicKey(item);
+      if(!key || blockedTopics.has(key) || sessionTopics.has(key) || testImportance(item)<0) continue;
       const src=item.source||'Autre', cat=item.category||'Autre';
       if((sourceCounts.get(src)||0)>=2) continue;
       if((categoryCounts.get(cat)||0)>=3) continue;
-      chosen.push(item);
+      chosen.push(item); sessionTopics.add(key);
       sourceCounts.set(src,(sourceCounts.get(src)||0)+1);
       categoryCounts.set(cat,(categoryCounts.get(cat)||0)+1);
       if(chosen.length>=count) break;
     }
+    // Deuxième passage : on relâche source/catégorie, mais jamais le doublon de sujet dans la même session.
     if(chosen.length<count){
       for(const item of available){
-        if(chosen.includes(item)) continue;
-        chosen.push(item);
+        const key=topicKey(item);
+        if(chosen.includes(item)||!key||blockedTopics.has(key)||sessionTopics.has(key)||testImportance(item)<0) continue;
+        chosen.push(item); sessionTopics.add(key);
         if(chosen.length>=count) break;
       }
     }
     return shuffle(chosen);
   };
 
-  const buildDeck=(count=12,mode='gras')=>{
+  const buildDeck=(count=20,mode='gras')=>{
     setPhotoDeckMessage('');
     const base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
     if(!base.length) return;
-    // Évite de resservir immédiatement les mêmes articles entre deux sessions.
-    let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url));
-    if(pool.length<Math.min(count*2,base.length)) pool=base;
-    const items=pickDiverseItems(pool,Math.min(Math.max(count*4,36),pool.length));
-    const facts=items.map(item=>{const fact=withLead(item,makeFact(item));return fact?{item,...fact}:null}).filter(Boolean);
+    // On évite à la fois les mêmes ARTICLES et les mêmes SUJETS vus récemment.
+    let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url) && !recentTopicKeys.includes(topicKey(n)));
+    if(pool.length<Math.min(count*2,base.length)) pool=base.filter(n=>!recentTopicKeys.includes(topicKey(n)));
+    if(pool.length<Math.min(count,base.length)) pool=base;
+    const items=pickDiverseItems(pool,Math.min(Math.max(count*5,60),pool.length),[],recentTopicKeys.slice(-18));
+    const facts=items.map(item=>{const fact=withLead(item,makeFact(item));return fact?{item,...fact,topicKey:topicKey(item)}:null}).filter(Boolean);
     let cards;
     if(mode==='leconte'){
       cards=shuffle(facts.filter(x=>x.item.image)).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
     }else{
-      const reliable=shuffle(facts.filter(x=>x.quality>=8));
+      // Une seule question par sujet dans la session, même si plusieurs médias parlent du même événement.
+      const seenTopics=new Set();
+      const reliable=shuffle(facts.filter(x=>x.quality>=8)).filter(f=>{
+        if(!f.topicKey || seenTopics.has(f.topicKey)) return false;
+        seenTopics.add(f.topicKey); return true;
+      });
       cards=[];
       for(const fact of reliable){
         const options=fact.quality>=6?buildOptions(fact,reliable):[];
@@ -422,10 +466,11 @@ function App(){
       }
       cards=shuffle(cards);
     }
-    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-30));
+    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-60));
+    setRecentTopicKeys(keys=>[...keys,...cards.map(c=>c.topicKey||topicKey(c.item)).filter(Boolean)].slice(-40));
     setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizAnswer(''); setQuizResult(null); setPhotoAnswer('');
   };
-  const makeQuiz=()=>buildDeck(12,'gras');
+  const makeQuiz=()=>buildDeck(20,'gras');
   const resolvePhoto=async(item)=>{
     if(item?.image) return {...item,image:item.image};
     if(!item?.url) return null;
@@ -438,9 +483,10 @@ function App(){
   };
   const makePhotoTest=async()=>{
     const base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
-    let candidates=base.filter(n=>!recentTestIds.includes(n.id||n.url));
-    if(candidates.length<10) candidates=base;
-    const pool=pickDiverseItems(candidates,Math.min(42,candidates.length));
+    let candidates=base.filter(n=>!recentTestIds.includes(n.id||n.url) && !recentTopicKeys.includes(topicKey(n)));
+    if(candidates.length<10) candidates=base.filter(n=>!recentTopicKeys.includes(topicKey(n)));
+    if(candidates.length<6) candidates=base;
+    const pool=pickDiverseItems(candidates,Math.min(60,candidates.length),[],recentTopicKeys.slice(-18));
     setPhotoDeckLoading(true); setPhotoDeckMessage('Recherche de photos d’actualité exploitables…');
     setDeck([]); setDeckIndex(0); setPhotoAnswer(''); setQuizResult(null); setFlashRevealed(false); setDeckStats({ok:0,review:0});
     const found=[];
@@ -458,7 +504,8 @@ function App(){
       }
     }
     const cards=found.slice(0,6).map(item=>({item,kind:'photo'}));
-    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-30));
+    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-60));
+    setRecentTopicKeys(keys=>[...keys,...cards.map(c=>topicKey(c.item)).filter(Boolean)].slice(-40));
     setDeck(shuffle(cards)); setDeckIndex(0); setPhotoDeckLoading(false);
     setPhotoDeckMessage(cards.length?`${cards.length} photo${cards.length>1?'s':''} prête${cards.length>1?'s':''}.`:'Aucune vraie photo exploitable n’a été trouvée dans les articles chargés.');
   };
@@ -571,11 +618,11 @@ function App(){
 
       {tab==='Révisions'&&<section className="noTop">
         <div className="revisionIntro"><div><p className="eyebrow">Révision intelligente</p><h2>Choisis ton mode</h2><p>Les exercices portent sur le contenu de l’actualité, jamais sur le nom du média qui a publié l’article.</p></div></div>
-        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(12,'gras')}}><span>JUSQU’À 12 QUESTIONS</span><strong>Session Mr Gras</strong><small>QCM sur les faits essentiels + flashcards</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
+        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(20,'gras')}}><span>JUSQU’À 20 QUESTIONS · 1 SUJET = 1 QUESTION</span><strong>Session Mr Gras</strong><small>Sujets variés, sans répétition de la même actualité dans la session</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>Jusqu’à 12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>Jusqu’à 12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
         {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
@@ -601,7 +648,7 @@ function App(){
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
-        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(12,'gras')}>Relancer une session</button></article>}
+        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(20,'gras')}>Relancer une session</button></article>}
       </section>}
 
       {tab==='Mes tests'&&<section className="noTop">
