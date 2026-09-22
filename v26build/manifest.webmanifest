@@ -1,0 +1,13 @@
+{
+  "name": "IHECS Test Actus",
+  "short_name": "IHECS Actus",
+  "description": "Révisions et tests d’actualité pour l’IHECS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f4ee",
+  "theme_color": "#171717",
+  "lang": "fr-BE",
+  "icons": [
+    {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
