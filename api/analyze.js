@@ -22,10 +22,29 @@ const categoryFor = (text='') => {
 };
 const sentences = text => (text.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[]).map(s=>s.trim()).filter(s=>s.length>35);
 
+
+const ensurePeriod = s => {s=(s||'').trim(); return /[.!?…]$/.test(s)?s:`${s}.`};
+function titleSummary(title=''){
+  let t=strip(title).replace(/[«»]/g,'').replace(/\s+/g,' ').trim();
+  const i=t.indexOf(':');
+  if(i>3&&i<t.length-4){const left=t.slice(0,i).trim(),right=t.slice(i+1).trim().replace(/^[\"'“]+|[\"'”]+$/g,'');if(right.length>18)return ensurePeriod(`Dans le contexte de ${left.toLowerCase()}, ${right.charAt(0).toLowerCase()+right.slice(1)}`)}
+  t=t.replace(/^[\"'“][^\"'”]{5,140}[\"'”]\s*[:–—-]\s*/,'').trim()||t;
+  return ensurePeriod(t.charAt(0).toUpperCase()+t.slice(1));
+}
+function revisionContext(category,title=''){
+  const t=title.toLowerCase();
+  if(/iran|ormuz|moyen-orient|guerre|gaza|ukraine|russie/.test(t)) return "Cette information s’inscrit dans un rapport de force international avec des conséquences possibles sur la sécurité, la diplomatie et l’économie.";
+  if(category==='Politique') return "Pour le test, retiens les acteurs politiques concernés, la décision ou l’évolution annoncée et ses conséquences.";
+  if(category==='Culture') return "Pour le test, retiens l’œuvre ou la personne concernée, l’événement ou la récompense et la raison de sa présence dans l’actualité.";
+  if(category==='Économie') return "Pour le test, retiens l’acteur économique, ce qui change et l’impact attendu.";
+  if(category==='Sport') return "Pour le test, retiens l’événement, les protagonistes et le résultat ou l’enjeu principal.";
+  if(category==='Sciences') return "Pour le test, retiens ce qui a été annoncé ou découvert, l’acteur à l’origine et ce que cela change.";
+  return "Pour le test, retiens le fait principal, les acteurs concernés et ce que cette actualité change concrètement.";
+}
 async function fetchHtml(url){
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),8000);
   try{
-    const r=await fetch(url,{signal:controller.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 VeilleIHECS/2.3'}});
+    const r=await fetch(url,{signal:controller.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 IHECS-Test-Actus/3.1'}});
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const type=r.headers.get('content-type')||'';
     if(!type.includes('text/html')) throw new Error('Le lien ne renvoie pas une page web lisible.');
@@ -49,12 +68,15 @@ export default async function handler(req,res){
     const body=strip(pastedText).length>100 ? strip(pastedText) : paras.join(' ');
     const base=(body||descMeta||title).slice(0,12000);
     const s=sentences(base);
-    const summary=(s.slice(0,3).join(' ')||descMeta||title).slice(0,900);
-    const context=(s.slice(3,6).join(' ')||'Complète le contexte avec la source originale : acteurs, date, antécédents et conséquences.').slice(0,900);
-    const keyPoints=s.slice(0,5).map(x=>x.slice(0,240));
     const category=categoryFor(`${title} ${base}`);
+    const summaryShort=titleSummary(title);
+    const extra=s.find(x=>!summaryShort.toLowerCase().includes(x.toLowerCase().slice(0,45)) && x.length<260)||'';
+    const summaryLong=[summaryShort, extra?`L’article précise notamment que ${extra.charAt(0).toLowerCase()+extra.slice(1)}`:'', revisionContext(category,title)].filter(Boolean).join(' ').slice(0,1100);
+    const summary=summaryShort;
+    const context=revisionContext(category,title);
+    const keyPoints=s.slice(0,5).map(x=>x.slice(0,240));
     return res.status(200).json({
-      title, source:site, url:u.toString(), image, description:summary, context, keyPoints, category,
+      title, source:site, url:u.toString(), image, description:summary, summaryShort, summaryLong, context, keyPoints, category,
       access: strip(pastedText).length>100 ? 'texte-fourni' : body.length>250 ? 'article-public' : 'limite',
       warning: fetchError || (body.length<=250 ? "Le contenu complet n'a pas pu être lu. Si tu es abonné, colle le texte de l'article dans le champ prévu." : '')
     });

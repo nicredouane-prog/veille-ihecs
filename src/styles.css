@@ -15,3 +15,16 @@
 .brandLogo{width:44px;height:44px;object-fit:contain;border-radius:10px;background:#fff}.brand{align-items:center}.brand>div:last-child{min-width:0}.brand strong{white-space:nowrap}.answers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}.answers button{min-height:58px;text-align:left;padding:13px 15px;border:1px solid #d9d4cb;background:#faf9f6;color:#171717;font:inherit;font-weight:650;cursor:pointer;border-radius:4px}.answers button:hover{border-color:#8e1b2c}.answers button.chosen{background:#171717;color:#fff;border-color:#171717}.answers button:disabled{cursor:default}.sourceStrip span{cursor:default}.sourceStrip .sourceOk:after{content:' ✓';font-size:9px}.sourceStrip .sourceOff{opacity:.42;text-decoration:none}.sourceStrip{row-gap:7px}.newsGrid{align-items:stretch}
 @media(max-width:720px){.answers{grid-template-columns:1fr}.brandLogo{width:38px;height:38px}}
 .brandWordmark{display:block;width:188px;max-width:100%;height:auto;object-fit:contain}.brand{padding:0 3px 8px}.brandLogo{display:none}
+
+/* v3.0 — identité plus nette dans la sidebar */
+.sidebar{background:#161412}
+.brand{display:flex;gap:11px;align-items:center;padding:2px 8px 26px}
+.brandLogo{display:block;width:48px;height:48px;object-fit:contain;border-radius:11px;background:transparent}
+.brandText{min-width:0}
+.brandText strong{display:block;color:#f7f3eb;font-size:15px;line-height:1.15;letter-spacing:-.01em;white-space:nowrap}
+.brandText span{display:block;color:#9e968d;font-size:7px;letter-spacing:.15em;margin-top:5px;white-space:nowrap}
+.brandWordmark{display:none!important}
+@media(max-width:720px){.brand{display:none}.brandLogo{width:38px;height:38px}}
+
+/* v3.1 — résumés de fiche */
+.summaryStack{display:grid;gap:10px}.summaryShort{border-left:4px solid var(--accent)}.summaryLong{background:#f1eee8}.summaryLong span{color:#5e5851}.summaryLong p{font-size:15px;line-height:1.65}.summaryShort p{font-weight:600}

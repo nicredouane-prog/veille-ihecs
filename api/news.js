@@ -26,6 +26,31 @@ function categoryFor(text=''){
   return 'Belgique / Société';
 }
 
+
+
+function ensurePeriod(s=''){s=s.trim();return /[.!?…]$/.test(s)?s:`${s}.`}
+function headlineSummary(title='',category=''){
+  let t=(title||'').replace(/[«»]/g,'').replace(/\s+/g,' ').trim();
+  if(!t) return '';
+  const i=t.indexOf(':');
+  if(i>3&&i<t.length-4){
+    const left=t.slice(0,i).trim(), right=t.slice(i+1).trim().replace(/^[\"'“]+|[\"'”]+$/g,'');
+    if(right.length>18) return ensurePeriod(`Dans le contexte de ${left.toLowerCase()}, ${right.charAt(0).toLowerCase()+right.slice(1)}`);
+  }
+  t=t.replace(/^[\"'“][^\"'”]{5,140}[\"'”]\s*[:–—-]\s*/,'').trim()||t;
+  return ensurePeriod(t.charAt(0).toUpperCase()+t.slice(1));
+}
+function contextSentence(category='',title=''){
+  const t=(title||'').toLowerCase();
+  if(/iran|ormuz|moyen-orient|guerre|isra[eë]l|gaza|ukraine|russie/.test(t)) return "L’enjeu concerne aussi les rapports de force internationaux, la sécurité et les conséquences diplomatiques ou économiques.";
+  if(/gouvernement|ministre|parlement|élection|coalition|président|diplomat/.test(t)||category==='Politique') return "Il faut surtout retenir les acteurs concernés, la décision ou l’évolution politique et ses conséquences.";
+  if(/gr[eè]ve|a[eé]roport|skeyes|transport|train|sncb/.test(t)) return "Il faut surtout retenir l’origine de la perturbation, les acteurs concernés et son impact concret.";
+  if(/prix|festival|film|cin[eé]ma|r[eé]compense|remporte|gagne/.test(t)||category==='Culture') return "Il faut retenir l’œuvre ou la personne concernée, la distinction ou l’événement culturel et pourquoi il fait l’actualité.";
+  if(category==='Économie') return "Le point important est l’acteur économique concerné, l’évolution annoncée et son impact potentiel.";
+  if(category==='Sport') return "Le point important est l’événement, les acteurs principaux et le résultat ou l’enjeu sportif.";
+  if(category==='Sciences') return "Le point important est ce qui a été annoncé ou découvert, par qui, et ce que cela change.";
+  return "Le point essentiel est le fait principal, les acteurs concernés et la raison pour laquelle l’événement compte.";
+}
 function parseFeed(xml, configuredSource){
   const blocks=xml.match(/<item\b[\s\S]*?<\/item>/gi)||[];
   return blocks.map((item,index)=>{
@@ -36,13 +61,13 @@ function parseFeed(xml, configuredSource){
     const pubDateRaw=tag(item,'pubDate')||tag(item,'dc:date');
     const date=pubDateRaw?new Date(pubDateRaw):new Date();
     const enclosure=attr(item,'enclosure','url')||attr(item,'media:content','url')||attr(item,'media:thumbnail','url');
-    return {id:`${configuredSource}-${date.getTime()}-${index}-${title.slice(0,24)}`,title,source:configuredSource,url:strip(tag(item,'link')),description:description.slice(0,650),image:enclosure,date:Number.isNaN(date.getTime())?new Date().toISOString():date.toISOString(),category:categoryFor(`${title} ${description}`)};
+    const category=categoryFor(`${title} ${description}`); const summaryShort=headlineSummary(title,category); const summaryLong=[summaryShort,contextSentence(category,title)].filter(Boolean).join(' '); return {id:`${configuredSource}-${date.getTime()}-${index}-${title.slice(0,24)}`,title,source:configuredSource,url:strip(tag(item,'link')),description:description.slice(0,650),summaryShort,summaryLong,image:enclosure,date:Number.isNaN(date.getTime())?new Date().toISOString():date.toISOString(),category};
   }).filter(x=>x.title&&x.url);
 }
 
 async function fetchText(url){
   const c=new AbortController(); const timer=setTimeout(()=>c.abort(),8000);
-  try{const r=await fetch(url,{signal:c.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 IHECS-Test-Actus/2.7'}});if(!r.ok) throw new Error(`HTTP ${r.status}`);return await r.text()}finally{clearTimeout(timer)}
+  try{const r=await fetch(url,{signal:c.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 IHECS-Test-Actus/3.1'}});if(!r.ok) throw new Error(`HTTP ${r.status}`);return await r.text()}finally{clearTimeout(timer)}
 }
 const googleUrl=(q,days)=>`https://news.google.com/rss/search?q=${encodeURIComponent(`${q} when:${days}d`)}&hl=fr&gl=BE&ceid=BE:fr`;
 
