@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v4.3';
+const APP_VERSION='v4.5';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
   const d=new Date(value);
@@ -104,10 +104,12 @@ function App(){
   const [refreshing,setRefreshing]=useState(false);
   const lastFetchRef=useRef(0);
   const [query,setQuery]=useState('');
+  const [visibleLimit,setVisibleLimit]=useState(60);
   const [category,setCategory]=useState('Toutes');
   const [dateFilter,setDateFilter]=useState(()=>localStorage.getItem('veille-date-filter')||'all');
   const [customSince,setCustomSince]=useState(()=>localStorage.getItem('veille-custom-since')||'');
   const [selected,setSelected]=useState(null);
+  const swipeStartRef=useRef(null);
   const [quiz,setQuiz]=useState(null);
   const [quizAnswer,setQuizAnswer]=useState('');
   const [quizResult,setQuizResult]=useState(null);
@@ -255,6 +257,8 @@ function App(){
     const dateOk=!filterSince || (n.date||'').slice(0,10)>=filterSince;
     return dateOk && (category==='Toutes'||n.category===category) && (!q||`${n.title} ${n.description} ${n.source}`.toLowerCase().includes(q));
   }),[combinedNews,query,category,filterSince]);
+  useEffect(()=>setVisibleLimit(60),[query,category,dateFilter,customSince]);
+
   const relatedToSelected=useMemo(()=>{
     if(!selected) return [];
     return combinedNews
@@ -264,6 +268,67 @@ function App(){
       .sort((a,b)=>b.score-a.score || new Date(b.n.date)-new Date(a.n.date))
       .slice(0,6).map(x=>x.n);
   },[selected,combinedNews]);
+
+  const articleDeck=useMemo(()=>{
+    const base=tab==='Actualités'&&filtered.length?filtered:combinedNews;
+    if(!selected) return base;
+    if(base.some(n=>String(n.id)===String(selected.id))) return base;
+    return [selected,...base];
+  },[tab,filtered,combinedNews,selected]);
+  const articleIndex=selected?articleDeck.findIndex(n=>String(n.id)===String(selected.id)):-1;
+
+  const navTo=(next,{replace=false}={})=>{
+    if(next===tab && !selected) return;
+    const state={ihecs:true,tab:next};
+    const hash=`#${next.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-')}`;
+    if(replace) window.history.replaceState(state,'',hash); else window.history.pushState(state,'',hash);
+    setSelected(null); setTutorialOpen(false); setTab(next);
+  };
+  const openArticle=(item,{replace=false}={})=>{
+    if(!item) return;
+    const state={ihecs:true,tab,articleId:String(item.id)};
+    const hash=`#actu-${encodeURIComponent(String(item.id)).slice(0,80)}`;
+    if(replace) window.history.replaceState(state,'',hash); else window.history.pushState(state,'',hash);
+    setSelected(item);
+  };
+  const closeArticle=()=>{
+    if(window.history.state?.ihecs&&window.history.state?.articleId) window.history.back();
+    else setSelected(null);
+  };
+  const navigateArticle=dir=>{
+    if(articleDeck.length<2||articleIndex<0) return;
+    const next=(articleIndex+dir+articleDeck.length)%articleDeck.length;
+    openArticle(articleDeck[next],{replace:true});
+  };
+  const onArticleTouchStart=e=>{
+    const t=e.changedTouches?.[0]; if(t) swipeStartRef.current={x:t.clientX,y:t.clientY};
+  };
+  const onArticleTouchEnd=e=>{
+    const start=swipeStartRef.current; const t=e.changedTouches?.[0]; swipeStartRef.current=null;
+    if(!start||!t) return;
+    const dx=t.clientX-start.x, dy=t.clientY-start.y;
+    if(Math.abs(dx)<65||Math.abs(dx)<Math.abs(dy)*1.25) return;
+    navigateArticle(dx<0?1:-1);
+  };
+
+  useEffect(()=>{
+    const state=window.history.state;
+    if(!state?.ihecs) window.history.replaceState({ihecs:true,tab:'Accueil'},'',window.location.pathname+window.location.search+'#accueil');
+  },[]);
+  useEffect(()=>{
+    const onPop=e=>{
+      const state=e.state;
+      if(!state?.ihecs) return;
+      setTutorialOpen(false);
+      setTab(state.tab||'Accueil');
+      if(state.articleId){
+        const found=combinedNews.find(n=>String(n.id)===String(state.articleId));
+        setSelected(found||null);
+      }else setSelected(null);
+    };
+    window.addEventListener('popstate',onPop);
+    return()=>window.removeEventListener('popstate',onPop);
+  },[combinedNews]);
 
   const toggleSaved=id=>setSaved(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
@@ -638,6 +703,18 @@ function App(){
   };
   const tutorialPrev=()=>setTutorialStep(i=>Math.max(0,i-1));
 
+  const testNotification=async()=>{
+    if(!('Notification' in window)){ setNotifStatus('unsupported'); return; }
+    let permission=Notification.permission;
+    if(permission!=='granted'){ permission=await Notification.requestPermission(); setNotifStatus(permission); }
+    if(permission!=='granted') return;
+    try{
+      const reg=await navigator.serviceWorker?.ready;
+      if(reg) await reg.showNotification('IHECS Test Actus',{body:'Les notifications fonctionnent sur cet appareil.',icon:'/app-icon.png',badge:'/app-icon.png',tag:'ihecs-test-notification'});
+      else new Notification('IHECS Test Actus',{body:'Les notifications fonctionnent sur cet appareil.'});
+    }catch{ try{ new Notification('IHECS Test Actus',{body:'Les notifications fonctionnent sur cet appareil.'}); }catch{} }
+  };
+
   const installApp=async()=>{
     if(!installPrompt) return;
     await installPrompt.prompt();
@@ -648,7 +725,7 @@ function App(){
   return <div className="shell">
     <aside className="sidebar">
       <div className="brand"><img className="brandLogo" src="/app-icon.png" alt=""/><div className="brandText"><strong>IHECS Test Actus</strong><span>RÉVISIONS D’ACTUALITÉ</span></div></div>
-      <nav>{nav.map(([x,icon])=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}><span>{icon}</span>{x}</button>)}</nav>
+      <nav>{nav.map(([x,icon])=><button key={x} className={tab===x?'active':''} onClick={()=>navTo(x)}><span>{icon}</span>{x}</button>)}</nav>
       <div className="sideFoot"><span className={`dot ${error?'bad':loading?'wait':'ok'}`}></span>{loading?'Actualisation…':error?'Flux indisponible':'Veille en direct'}</div>
     </aside>
 
@@ -658,7 +735,7 @@ function App(){
       {tab==='Accueil'&&<>
         <section className="hero">
           <div><span className="liveBadge"><i/> ACTUALITÉ EN DIRECT</span><h2>Si j’avais un test demain</h2><p>L’app garde la matière depuis le dernier test surprise de Mr Gras et de Mr Leconte.</p><div className="heroMeta"><strong>{relevantNews.length}</strong> actus récupérées depuis la période la plus ancienne · <strong>{sourceStatus.filter(s=>s.ok).length}</strong> sources actives</div></div>
-          <button className="lightBtn" onClick={()=>{setTab('Tests fictifs');makeQuiz()}}>Faire un test blanc →</button>
+          <button className="lightBtn" onClick={()=>{navTo('Tests fictifs');makeQuiz()}}>Faire un test blanc →</button>
         </section>
 
         <section><div className="sectionTitle"><div><p className="eyebrow">Périodes automatiques</p><h2>Mes profs</h2></div></div>
@@ -668,14 +745,14 @@ function App(){
             <div className="testDateLine"><span>Dernier test</span><strong>{fmt(tests[p.key])}</strong></div>
             <div className="period"><span>Matière actuelle</span><strong>{fmt(nextDay(tests[p.key]),true)} → aujourd’hui</strong><small>{daysBetween(nextDay(tests[p.key]),today)+1} jours d’actualité</small></div>
             {editingTestDate===p.key&&<div className="dateEditor"><label>📌 Corriger la date du test<input type="date" max={today} value={testDateDraft} onChange={e=>setTestDateDraft(e.target.value)}/></label><div><button onClick={()=>saveTestDate(p.key)} disabled={!testDateDraft||testDateDraft>today}>Enregistrer</button><button className="secondary" onClick={()=>setEditingTestDate(null)}>Annuler</button></div></div>}
-            <div className="actions"><button onClick={()=>setTab('Révisions')}>Réviser</button><button className="secondary" onClick={()=>markTest(p.key)}>J’ai eu un test aujourd’hui</button><button className="pinDateBtn" onClick={()=>openTestDateEditor(p.key)}>📌 Modifier la date</button></div>
+            <div className="actions"><button onClick={()=>navTo('Révisions')}>Réviser</button><button className="secondary" onClick={()=>markTest(p.key)}>J’ai eu un test aujourd’hui</button><button className="pinDateBtn" onClick={()=>openTestDateEditor(p.key)}>📌 Modifier la date</button></div>
           </article>)}</div>
         </section>
 
-        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Installe l’app puis choisis l’heure à laquelle tu veux recevoir ton rappel.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">Version actuelle : le rappel fonctionne quand l’app ou son service est actif. La notification fiable même app fermée sera branchée au serveur dans l’étape suivante.</small></section>
+        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Choisis ton heure de rappel et vérifie immédiatement que ton téléphone autorise bien les notifications.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}<button className="secondary" onClick={testNotification}>Tester la notification</button>{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">Le test doit apparaître immédiatement. Le rappel programmé de cette version est fiable tant que l’app ou le navigateur reste actif ; pour une notification garantie app complètement fermée, il faut un vrai push serveur.</small></section>
 
-        <section><div className="sectionTitle"><div><p className="eyebrow">À surveiller</p><h2>Dernières actualités</h2></div><button className="textBtn" onClick={()=>setTab('Actualités')}>Tout voir →</button></div>
-          {loading?<Skeleton/>:error?<Empty text={error}/>:<div className="headlineList">{combinedNews.slice(0,7).map((n,i)=><NewsRow key={n.id} n={n} index={i+1} onOpen={()=>setSelected(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
+        <section><div className="sectionTitle"><div><p className="eyebrow">À surveiller</p><h2>Dernières actualités</h2></div><button className="textBtn" onClick={()=>navTo('Actualités')}>Tout voir →</button></div>
+          {loading?<Skeleton/>:error?<Empty text={error}/>:<div className="headlineList">{combinedNews.slice(0,7).map((n,i)=><NewsRow key={n.id} n={n} index={i+1} onOpen={()=>openArticle(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
         </section>
       </>}
 
@@ -693,7 +770,7 @@ function App(){
         </div>
         <div className="sourceStrip"><strong>Sources suivies</strong>{sourceStatus.map(s=><span key={s.name} className={s.ok?'sourceOk':'sourceOff'}>{s.name}{s.ok&&typeof s.count==='number'?` · ${s.count}`:''}</span>)}</div>
         <div className="resultCount">{filtered.length} actualité{filtered.length>1?'s':''}{filterSince?' dans cette période':''}</div>
-        {loading?<Skeleton/>:error?<Empty text={error}/>:filtered.length===0?<Empty text="Aucune actualité trouvée pour cette période."/>:<div className="newsGrid">{filtered.map(n=><NewsCard key={n.id} n={n} onOpen={()=>setSelected(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
+        {loading?<Skeleton/>:error?<Empty text={error}/>:filtered.length===0?<Empty text="Aucune actualité trouvée pour cette période."/>:<><div className="newsGrid">{filtered.slice(0,visibleLimit).map(n=><NewsCard key={n.id} n={n} onOpen={()=>openArticle(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>{filtered.length>visibleLimit&&<div className="loadMoreWrap"><button className="loadMoreBtn" onClick={()=>setVisibleLimit(v=>Math.min(v+60,filtered.length))}>Afficher 60 actus de plus <span>{visibleLimit} / {filtered.length}</span></button></div>}</>}
       </section>}
 
       {tab==='Ajouter'&&<section className="noTop">
@@ -723,17 +800,17 @@ function App(){
             <h3>Quelle actualité cette photo représente-t-elle ?</h3>
             <p className="hint">Explique le fait, les personnes ou institutions concernées et le contexte en quelques lignes.</p>
             <textarea value={photoAnswer} onChange={e=>setPhotoAnswer(e.target.value)} placeholder="Ta réponse…"/>
-            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{displaySummaries(c.item).long||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{displaySummaries(c.item).long||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>openArticle(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:c.kind==='mcq'?<>
             <span className="cardCategory">{c.item.category}</span>
             <h3>{c.question}</h3>
             <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
-            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p><p>{displaySummaries(c.item).long}</p><div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p><p>{displaySummaries(c.item).long}</p><div className="correctionLinks"><button className="textBtn left" onClick={()=>openArticle(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
             {c.lead&&<div className="questionContext"><span>Contexte de la question</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
-            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3><p>{displaySummaries(c.item).long}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
+            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3><p>{displaySummaries(c.item).long}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>openArticle(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
@@ -747,14 +824,14 @@ function App(){
 
       {tab==='Tutoriel'&&<section className="noTop tutorialPage">
         <div className="tutorialHero"><div><p className="eyebrow">Aide & prise en main</p><h2>Découvrir IHECS Test Actus</h2><p>Relance la présentation complète de l’application ou consulte rapidement les fonctions principales.</p></div><button className="submit" onClick={relaunchTutorial}>Relancer le tutoriel</button></div>
-        <div className="tutorialOverview">{tutorialSteps.slice(1,-1).map((step,i)=><article className="tutorialOverviewCard" key={step.title}><span>{String(i+1).padStart(2,'0')}</span><h3>{step.title}</h3><p>{step.text}</p><button className="textBtn left" onClick={()=>setTab(step.tab)}>Ouvrir {step.tab} →</button></article>)}</div>
+        <div className="tutorialOverview">{tutorialSteps.slice(1,-1).map((step,i)=><article className="tutorialOverviewCard" key={step.title}><span>{String(i+1).padStart(2,'0')}</span><h3>{step.title}</h3><p>{step.text}</p><button className="textBtn left" onClick={()=>navTo(step.tab)}>Ouvrir {step.tab} →</button></article>)}</div>
       </section>}
     </main>
 
-    {tutorialOpen&&<div className="tutorialBack" role="dialog" aria-modal="true" aria-label="Tutoriel IHECS Test Actus"><article className="tutorialModal"><div className="tutorialModalTop"><div><span className="tutorialStepCount">{tutorialStep+1} / {tutorialSteps.length}</span><div className="tutorialDots">{tutorialSteps.map((_,i)=><i key={i} className={i<=tutorialStep?'active':''}/>)}</div></div><button className="tutorialSkip" onClick={closeTutorial}>Passer</button></div><div className="tutorialVisual"><span>{nav.find(n=>n[0]===tutorialSteps[tutorialStep].tab)?.[1]||'•'}</span></div><p className="eyebrow">Présentation de l’app</p><h2>{tutorialSteps[tutorialStep].title}</h2><p className="tutorialText">{tutorialSteps[tutorialStep].text}</p><div className="tutorialActions">{tutorialStep>0?<button className="secondary" onClick={tutorialPrev}>← Précédent</button>:<span/>}<button className="secondary" onClick={()=>{setTab(tutorialSteps[tutorialStep].tab);setTutorialOpen(false)}}>Voir cette section</button><button className="submit" onClick={tutorialNext}>{tutorialStep===tutorialSteps.length-1?'Terminer':'Suivant →'}</button></div></article></div>}
+    {tutorialOpen&&<div className="tutorialBack" role="dialog" aria-modal="true" aria-label="Tutoriel IHECS Test Actus"><article className="tutorialModal"><div className="tutorialModalTop"><div><span className="tutorialStepCount">{tutorialStep+1} / {tutorialSteps.length}</span><div className="tutorialDots">{tutorialSteps.map((_,i)=><i key={i} className={i<=tutorialStep?'active':''}/>)}</div></div><button className="tutorialSkip" onClick={closeTutorial}>Passer</button></div><div className="tutorialVisual"><span>{nav.find(n=>n[0]===tutorialSteps[tutorialStep].tab)?.[1]||'•'}</span></div><p className="eyebrow">Présentation de l’app</p><h2>{tutorialSteps[tutorialStep].title}</h2><p className="tutorialText">{tutorialSteps[tutorialStep].text}</p><div className="tutorialActions">{tutorialStep>0?<button className="secondary" onClick={tutorialPrev}>← Précédent</button>:<span/>}<button className="secondary" onClick={()=>{navTo(tutorialSteps[tutorialStep].tab);setTutorialOpen(false)}}>Voir cette section</button><button className="submit" onClick={tutorialNext}>{tutorialStep===tutorialSteps.length-1?'Terminer':'Suivant →'}</button></div></article></div>}
 
-    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmtNews(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
-        {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmtNews(r.date)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>setSelected(r)}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}
+    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={closeArticle}><article className="modal articleReader" onClick={e=>e.stopPropagation()} onTouchStart={onArticleTouchStart} onTouchEnd={onArticleTouchEnd}><div className="articleReaderTop"><button className="readerArrow" onClick={()=>navigateArticle(-1)} disabled={articleDeck.length<2} aria-label="Actualité précédente">‹</button><div className="readerPosition"><strong>{articleIndex>=0?articleIndex+1:1} / {articleDeck.length||1}</strong><span>Glisse ← → pour changer d’actu</span></div><button className="readerArrow" onClick={()=>navigateArticle(1)} disabled={articleDeck.length<2} aria-label="Actualité suivante">›</button></div><button className="close" onClick={closeArticle} aria-label="Fermer">×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmtNews(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
+        {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmtNews(r.date)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>openArticle(r,{replace:true})}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}
         <div className="modalActions"><a className="primaryLink" href={selected.url} target="_blank" rel="noreferrer">Lire l’article source ↗</a><button className="secondary" onClick={()=>toggleSaved(selected.id)}>{saved.includes(selected.id)?'★ Sauvegardé':'☆ Sauvegarder'}</button></div></article></div>})()}
   </div>
 }

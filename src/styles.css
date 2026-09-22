@@ -141,3 +141,26 @@
   .sidebar nav{grid-template-columns:repeat(7,minmax(54px,1fr));overflow-x:auto;scrollbar-width:none}.sidebar nav::-webkit-scrollbar{display:none}.sidebar nav button{min-width:54px}
   .tutorialBack{padding:0;place-items:end center}.tutorialModal{border-radius:20px 20px 0 0;border-left:0;border-right:0;border-bottom:0;padding:22px 16px calc(18px + env(safe-area-inset-bottom));max-height:92vh;overflow:auto}.tutorialVisual{width:62px;height:62px;font-size:27px;margin:22px 0 16px}.tutorialModal h2{font-size:29px}.tutorialText{font-size:15px}.tutorialActions{grid-template-columns:1fr 1fr}.tutorialActions>span{display:none}.tutorialActions button{width:100%}.tutorialActions .submit{grid-column:1/-1;grid-row:1}.tutorialHero{display:block;padding:22px 18px}.tutorialHero h2{font-size:29px}.tutorialHero .submit{width:100%;margin-top:12px}.tutorialOverview{grid-template-columns:1fr}.tutorialOverviewCard{min-height:0}.tutorialOverviewCard h3{font-size:21px}
 }
+
+
+/* v4.4 — pagination douce des gros volumes */
+.loadMoreWrap{display:flex;justify-content:center;padding:22px 0 8px}.loadMoreBtn{border:1px solid #d9d4cb;background:#fff;color:#171717;padding:12px 18px;border-radius:999px;font-weight:700;cursor:pointer}.loadMoreBtn span{color:#8a8178;font-weight:600;margin-left:8px}@media(max-width:720px){.loadMoreBtn{width:100%;min-height:48px}.reminderControls .secondary{min-height:44px}}
+\n\n/* v4.5 — lecteur mobile, swipe et bouton Retour Android */
+.articleReaderTop{display:grid;grid-template-columns:46px 1fr 46px;align-items:center;gap:8px;margin:0 44px 14px 0;padding:7px 0 12px;border-bottom:1px solid #e4dfd7}.readerArrow{width:42px;height:42px;border:1px solid #d8d2c8;background:#fff;border-radius:50%;font-size:28px;line-height:1;display:grid;place-items:center;cursor:pointer}.readerArrow:disabled{opacity:.25;cursor:default}.readerPosition{text-align:center;min-width:0}.readerPosition strong{display:block;font-size:12px}.readerPosition span{display:block;color:#8b837a;font-size:11px;margin-top:2px}.articleReader{touch-action:pan-y}.articleReader .close{z-index:3}.swipeHint{font-size:11px;color:#8b837a}
+@media(max-width:720px){
+  .articleReader{padding-top:12px!important;scroll-behavior:smooth}
+  .articleReaderTop{position:sticky;top:-12px;z-index:8;background:rgba(248,246,241,.97);backdrop-filter:blur(10px);margin:0 38px 12px 0;padding:10px 0 9px}
+  .readerArrow{width:40px;height:40px;background:#fefdf9}
+  .readerPosition strong{font-size:11px}.readerPosition span{font-size:10px}
+  .articleReader .close{position:sticky;float:right;top:8px;margin-top:-61px;margin-right:-3px;width:40px;height:40px;background:#fefdf9;border:1px solid #d8d2c8;border-radius:50%;display:grid;place-items:center}
+  .articleReader .modalMeta{clear:both;padding-top:4px}
+  .articleReader h2{font-size:27px}
+  .articleReader .modalImage{border-radius:12px}
+  .articleReader .summaryStack{gap:12px}
+  .articleReader .factBox{border-radius:12px;padding:16px 14px}
+  .articleReader .topicFollow{margin-top:22px}
+  .articleReader .relatedList{gap:0}
+  .articleReader .relatedItem{padding:16px 0}
+  .articleReader .modalActions{position:sticky;bottom:0;z-index:7;background:linear-gradient(to top,#f8f6f1 82%,rgba(248,246,241,.92));margin:20px -16px -92px;padding:16px 16px calc(18px + env(safe-area-inset-bottom));border-top:1px solid #ded8cf}
+  .articleReader .modalActions a,.articleReader .modalActions button{min-height:48px;display:grid;place-items:center}
+}
