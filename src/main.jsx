@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v2.6';
+const APP_VERSION='v2.7';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -129,36 +129,81 @@ function App(){
 
   const toggleSaved=id=>setSaved(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
-  const factualPrompt=(item)=>{
-    if(item.quizPrompt && item.quizAnswer) return {question:item.quizPrompt,answer:item.quizAnswer};
-    const t=(item.title||'').replace(/\s+[–—-]\s+[^–—-]+$/,'').trim();
+  const cleanTitle=(value='')=>value
+    .replace(/\s+[–—-]\s+(RTBF|RTL info|La Libre|Le Soir|BX1|La DH|DHnet|Le Vif|L'Avenir|Sudinfo).*$/i,'')
+    .replace(/\s+/g,' ').trim();
+
+  const makeFact=(item)=>{
+    if(item.quizPrompt && item.quizAnswer) return {question:item.quizPrompt,answer:item.quizAnswer,type:'text',quality:3};
+    const t=cleanTitle(item.title||'');
     let m;
-    if((m=t.match(/^(.+?)\s+(?:remporte|gagne|reçoit|décroche)\s+(.+)$/i))) return {question:`Qu’a remporté ${m[1]} ?`,answer:m[2]};
-    if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient)\s+(.+)$/i))) return {question:`Quelle nouvelle fonction ou situation concerne ${m[1]} ?`,answer:m[2]};
-    if((m=t.match(/^(.+?)\s+lance\s+(.+)$/i))) return {question:`Quelle organisation a lancé « ${m[2]} » ?`,answer:m[1]};
-    if((m=t.match(/^(.+?)\s+annonce\s+(.+)$/i))) return {question:`Qui a annoncé « ${m[2]} » ?`,answer:m[1]};
-    return {question:`À partir de cette actualité — « ${t || item.title} » — explique ce qu’il s’est passé, qui est concerné et pourquoi c’est important.`,answer:item.description||item.title};
-  };
-  const buildDeck=(count=10)=>{
-    const pool=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
-    if(!pool.length) return;
-    const shuffled=[...pool].sort(()=>Math.random()-.5).slice(0,Math.min(count,pool.length));
-    const cards=shuffled.map((item,i)=>({kind:i%4===3?'photo':'flash',item,...factualPrompt(item)}));
-    setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizResult(null); setPhotoAnswer('');
-  };
-  const makeQuiz=()=>buildDeck(10);
-  const makePhotoTest=()=>{
-    const pool=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
-    if(!pool.length) return;
-    const item=pool[Math.floor(Math.random()*pool.length)];
-    setDeck([{kind:'photo',item,...factualPrompt(item)}]); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setPhotoAnswer(''); setQuizResult(null);
-  };
-  const nextCard=(result)=>{
-    if(result) setDeckStats(s=>({...s,[result]:s[result]+1}));
-    setPhotoAnswer(''); setQuizResult(null); setFlashRevealed(false);
-    setDeckIndex(i=>Math.min(i+1,deck.length));
+    // Chiffres très testables : vols, personnes, euros, pourcentages, sièges, etc.
+    if((m=t.match(/\b(\d+(?:[.,]\d+)?)\s*(%|euros?|millions?|milliards?|vols?|personnes?|sièges?|points?|morts?|blessés?|jours?|ans?)\b/i))){
+      const answer=`${m[1]} ${m[2]}`;
+      const context=t.replace(m[0],'___');
+      return {question:`Quel chiffre complète cette actualité : « ${context} » ?`,answer,type:'number',number:Number(m[1].replace(',','.')),unit:m[2],quality:4};
+    }
+    // Deux acteurs/pays en tête du titre.
+    if((m=t.match(/^(La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][^,:;]{1,38}?)\s+et\s+([A-ZÀ-ÖØ-Ý][^,:;]{1,38}?)\s+(rétablissent|signent|annoncent|concluent|adoptent|lancent|décident|ouvrent|ferment)\b/i))){
+      const a=`${m[1]||''}${m[2]}`.trim(), b=m[3].trim();
+      return {question:`Quels sont les deux acteurs concernés par cette actualité : « ${t.slice((m[0]||'').length-m[4].length)} » ?`,answer:`${a} et ${b}`,type:'entity-pair',quality:5};
+    }
+    if((m=t.match(/^(.+?)\s+(?:remporte|gagne|reçoit|décroche)\s+(.+)$/i))) return {question:`Qu’a remporté ${m[1].trim()} ?`,answer:m[2].trim(),type:'text',quality:5};
+    if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient|est élu|est élue)\s+(.+)$/i))) return {question:`Quelle nouvelle fonction ou situation concerne ${m[1].trim()} ?`,answer:m[2].trim(),type:'text',quality:5};
+    if((m=t.match(/^(.+?)\s+(?:lance|présente|dévoile)\s+(.+)$/i))) return {question:`Qui a lancé ou présenté « ${m[2].trim()} » ?`,answer:m[1].trim(),type:'entity',quality:5};
+    if((m=t.match(/^(.+?)\s+(?:annonce|confirme|décide|adopte|approuve|rejette|suspend|supprime)\s+(.+)$/i))) return {question:`Qui est à l’origine de cette décision ou annonce : « ${m[2].trim()} » ?`,answer:m[1].trim(),type:'entity',quality:4};
+    if((m=t.match(/^(.+?)\s+a\s+(communiqué|demandé|proposé|signé|accepté|refusé|ouvert|fermé|réduit|augmenté)\s+(.+)$/i))) return {question:`Quel acteur a ${m[2]} ${m[3].trim()} ?`,answer:m[1].trim(),type:'entity',quality:4};
+    if((m=t.match(/^(.+?)\s+(?:est|sont)\s+(?:le|la|les|un|une)\s+(.+)$/i)) && m[1].length<55) return {question:`Qui ou quoi correspond à cette information : « ${m[2].trim()} » ?`,answer:m[1].trim(),type:'entity',quality:3};
+    // Fallback volontairement clair : pas de “explique cette actu” sans repère.
+    const subject=t.split(/[:—–-]/)[0].trim();
+    if(subject && subject.length>=4 && subject.length<=75 && subject!==t){
+      return {question:`Quel fait principal faut-il retenir au sujet de « ${subject} » ?`,answer:t,type:'open',quality:2};
+    }
+    return {question:`Quel est le fait principal à retenir dans cette actualité ?`,answer:t||item.description||'Information à revoir',type:'open',quality:1};
   };
 
+  const numberOptions=(fact)=>{
+    const n=fact.number;
+    if(!Number.isFinite(n)) return [];
+    const deltas=n<10?[1,2,3]:n<50?[5,10,15]:[10,20,30];
+    const vals=[n,...deltas.map(d=>Math.max(0,n+d)),Math.max(0,n-deltas[0])];
+    return [...new Set(vals)].slice(0,4).map(v=>`${String(v).replace('.',',')} ${fact.unit}`);
+  };
+  const shuffle=(arr)=>[...arr].sort(()=>Math.random()-.5);
+  const buildOptions=(fact,facts)=>{
+    if(fact.type==='number') return shuffle(numberOptions(fact));
+    if(!['entity','entity-pair','text'].includes(fact.type)) return [];
+    const other=facts.filter(x=>x!==fact && x.type===fact.type && x.answer && x.answer!==fact.answer).map(x=>x.answer);
+    const generic=fact.type==='entity' ? ['Le gouvernement belge','La Commission européenne','Les États-Unis','La Banque centrale européenne','L’ONU'] : [];
+    const choices=[fact.answer,...other,...generic].filter(Boolean);
+    const unique=[...new Set(choices)].slice(0,8);
+    if(unique.length<4) return [];
+    return shuffle([fact.answer,...shuffle(unique.filter(x=>x!==fact.answer)).slice(0,3)]);
+  };
+
+  const buildDeck=(count=12,mode='gras')=>{
+    const pool=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
+    if(!pool.length) return;
+    const shuffled=shuffle(pool).slice(0,Math.min(Math.max(count*2,20),pool.length));
+    const facts=shuffled.map(item=>({item,...makeFact(item)})).sort((a,b)=>b.quality-a.quality);
+    let cards;
+    if(mode==='leconte'){
+      cards=facts.filter(x=>x.item.image||x.item.url).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
+    }else{
+      cards=facts.slice(0,Math.min(count,facts.length)).map((fact,i)=>{
+        const options=buildOptions(fact,facts);
+        return {...fact,kind:options.length===4?'mcq':'flash',options};
+      });
+    }
+    setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizAnswer(''); setQuizResult(null); setPhotoAnswer('');
+  };
+  const makeQuiz=()=>buildDeck(12,'gras');
+  const makePhotoTest=()=>buildDeck(6,'leconte');
+  const nextCard=(result)=>{
+    if(result) setDeckStats(s=>({...s,[result]:s[result]+1}));
+    setPhotoAnswer(''); setQuizAnswer(''); setQuizResult(null); setFlashRevealed(false);
+    setDeckIndex(i=>Math.min(i+1,deck.length));
+  };
   const analyzeLink=async()=>{
     if(!addUrl.trim()) return;
     setAnalyzing(true); setAddMessage(''); setDraft(null);
@@ -166,7 +211,7 @@ function App(){
       const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:addUrl.trim(),pastedText:addText})});
       const data=await r.json();
       if(!r.ok) throw new Error(data.error||'Analyse impossible');
-      const fp=factualPrompt(data);
+      const fp=makeFact(data);
       setDraft({...data,quizPrompt:fp.question,quizAnswer:fp.answer});
       if(data.warning) setAddMessage(data.warning);
     }catch(e){setAddMessage(e.message||'Analyse impossible');}
@@ -203,7 +248,7 @@ function App(){
 
   return <div className="shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brandMark">IA</div><div><strong>IHECS Test Actus</strong><span>RÉVISIONS D’ACTUALITÉ</span></div></div>
+      <div className="brand"><img className="brandWordmark" src="/brand-logo.png" alt="IHECS Test Actus"/></div>
       <nav>{nav.map(([x,icon])=><button key={x} className={tab===x?'active':''} onClick={()=>setTab(x)}><span>{icon}</span>{x}</button>)}</nav>
       <div className="sideFoot"><span className={`dot ${error?'bad':loading?'wait':'ok'}`}></span>{loading?'Actualisation…':error?'Flux indisponible':'Veille en direct'}</div>
     </aside>
@@ -245,29 +290,34 @@ function App(){
 
       {tab==='Révisions'&&<section className="noTop">
         <div className="revisionIntro"><div><p className="eyebrow">Révision intelligente</p><h2>Choisis ton mode</h2><p>Les exercices portent sur le contenu de l’actualité, jamais sur le nom du média qui a publié l’article.</p></div></div>
-        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(10)}}><span>10 CARTES</span><strong>Session flashcards</strong><small>Questions d’actu à faire défiler</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>PHOTO</span><strong>Expliquer l’actualité</strong><small>Format Mr Leconte</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
+        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(12,'gras')}}><span>12 QUESTIONS</span><strong>Session Mr Gras</strong><small>QCM factuels + flashcards claires</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Une session = plusieurs cartes. Fais défiler comme des flashcards, puis marque ce que tu maîtrises ou dois revoir.</p></div><div className="examBtns"><button onClick={()=>buildDeck(10)}>10 nouvelles cartes</button><button className="secondary" onClick={makePhotoTest}>Photo seule</button></div></div>
-        {deck.length===0&&<Empty text="Lance une session de 10 cartes pour commencer."/>}
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : QCM à une seule réponse ou flashcards factuelles. Mr Leconte : photos d’actualité à expliquer. Chaque question a une réponse précise et vérifiable.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest}>6 photos · Mr Leconte</button></div></div>
+        {deck.length===0&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
         {deck.length>0&&deckIndex<deck.length&&(()=>{const c=deck[deckIndex];return <article className="examCard flashExam">
-          <div className="deckTop"><div className="questionNo">{c.kind==='photo'?'MR LECONTE · PHOTO':'MR GRAS · FLASHCARD'}</div><span>{deckIndex+1} / {deck.length}</span></div>
+          <div className="deckTop"><div className="questionNo">{c.kind==='photo'?'MR LECONTE · PHOTO':c.kind==='mcq'?'MR GRAS · QCM · UNE SEULE RÉPONSE':'MR GRAS · FLASHCARD'}</div><span>{deckIndex+1} / {deck.length}</span></div>
           <div className="progress"><i style={{width:`${((deckIndex+1)/deck.length)*100}%`}}/></div>
           {c.kind==='photo'?<>
-            <SmartImage item={c.item} className="testPhoto" alt="Photo liée à l’actualité" fallback={<div className="photoUnavailable"><strong>Aucune photo exploitable pour cette actu.</strong><span>Cette carte est remplacée par une autre actualité.</span><button type="button" onClick={makePhotoTest}>Changer d’actualité</button></div>}/>
-            <h3>Explique en quelques lignes l’actualité représentée par cette photo.</h3>
-            <p className="hint">Nom/personnes, fonction si pertinent, événement, contexte et pourquoi cette actualité compte.</p>
+            <SmartImage item={c.item} className="testPhoto" alt="Photo liée à l’actualité" fallback={<div className="photoUnavailable"><strong>Aucune photo exploitable pour cette actu.</strong><span>Passe à une autre photo.</span><button type="button" onClick={()=>nextCard('review')}>Question suivante</button></div>}/>
+            <h3>Quelle actualité cette photo représente-t-elle ?</h3>
+            <p className="hint">Explique le fait, les personnes ou institutions concernées et le contexte en quelques lignes.</p>
             <textarea value={photoAnswer} onChange={e=>setPhotoAnswer(e.target.value)} placeholder="Ta réponse…"/>
-            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Éléments à connaître</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
+            {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
+          </>:c.kind==='mcq'?<>
+            <span className="cardCategory">{c.item.category}</span>
+            <h3>{c.question}</h3>
+            <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
+            {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}</div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
             <h3>{c.question}</h3>
-            {!flashRevealed?<div className="flashHidden"><p>Réponds mentalement ou à voix haute avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Retourner la carte</button></div>:<div className="flashAnswer"><span>Réponse / éléments attendus</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
+            {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
           </>}
-          {(flashRevealed||quizResult)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
+          {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
-        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(10)}>Recommencer avec 10 cartes</button></article>}
+        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(12,'gras')}>Recommencer avec 12 questions</button></article>}
       </section>}
 
       {tab==='Mes tests'&&<section className="noTop">

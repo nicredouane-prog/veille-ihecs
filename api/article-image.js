@@ -13,7 +13,7 @@ function firstUsefulImg(html, base){
   const matches=[...html.matchAll(/<img\b[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi)];
   for(const m of matches){
     const u=absolute(decode(m[1]),base);
-    if(u && !/logo|icon|avatar|sprite|pixel|tracking|ads?\b/i.test(u)) return u;
+    if(u && !/logo|icon|avatar|sprite|pixel|tracking|ads?\b|favicon|brand|google|gnews|default|placeholder|author|profil/i.test(u)) return u;
   }
   return '';
 }
@@ -33,7 +33,9 @@ export default async function handler(req,res){
   let u; try{u=new URL(raw); if(!['http:','https:'].includes(u.protocol)) throw new Error()}catch{return res.status(400).json({image:''})}
   try{
     const {html,finalUrl}=await fetchHtml(u.toString());
-    const candidate=meta(html,'og:image:secure_url')||meta(html,'og:image')||meta(html,'twitter:image')||meta(html,'twitter:image:src')||firstUsefulImg(html,finalUrl);
-    return res.status(200).json({image:absolute(candidate,finalUrl)});
+    let candidate=meta(html,'og:image:secure_url')||meta(html,'og:image')||meta(html,'twitter:image')||meta(html,'twitter:image:src')||firstUsefulImg(html,finalUrl);
+    candidate=absolute(candidate,finalUrl);
+    if(/logo|icon|avatar|sprite|pixel|tracking|favicon|brand|google|gnews|default|placeholder|author|profil/i.test(candidate)) candidate='';
+    return res.status(200).json({image:candidate});
   }catch{return res.status(200).json({image:''})}
 }
