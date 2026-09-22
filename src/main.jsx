@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.5';
+const APP_VERSION='v3.6';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -104,6 +104,8 @@ function App(){
   const [notifStatus,setNotifStatus]=useState(typeof Notification==='undefined'?'unsupported':Notification.permission);
   const [installPrompt,setInstallPrompt]=useState(null);
   const [installed,setInstalled]=useState(()=>window.matchMedia?.('(display-mode: standalone)').matches||false);
+  const [editingTestDate,setEditingTestDate]=useState(null);
+  const [testDateDraft,setTestDateDraft]=useState('');
   const today=isoToday();
 
   useEffect(()=>localStorage.setItem('veille-tests',JSON.stringify(tests)),[tests]);
@@ -167,6 +169,20 @@ function App(){
     const previous=tests[key];
     setHistory(h=>[{id:crypto.randomUUID?.()||`${Date.now()}`,prof:key,date,from:nextDay(previous),to:date,previous},...h]);
     setTests(t=>({...t,[key]:date}));
+  };
+  const openTestDateEditor=(key)=>{ setEditingTestDate(key); setTestDateDraft(tests[key]||today); };
+  const saveTestDate=(key)=>{
+    if(!testDateDraft || testDateDraft>today) return;
+    const oldDate=tests[key];
+    setTests(t=>({...t,[key]:testDateDraft}));
+    setHistory(h=>{
+      const i=h.findIndex(x=>x.prof===key && x.date===oldDate);
+      if(i<0) return h;
+      const copy=[...h];
+      copy[i]={...copy[i],date:testDateDraft,to:testDateDraft};
+      return copy;
+    });
+    setEditingTestDate(null);
   };
 
   const combinedNews=useMemo(()=>{
@@ -510,7 +526,14 @@ function App(){
         </section>
 
         <section><div className="sectionTitle"><div><p className="eyebrow">Périodes automatiques</p><h2>Mes profs</h2></div></div>
-          <div className="profGrid">{profs.map(p=><article className="profCard" key={p.key}><div className="profTop"><span className="number">{p.key==='qcm'?'01':'02'}</span><span className="softPill">{p.label}</span></div><h3>{p.name}</h3><p className="muted">{p.type}</p><div className="period"><span>Matière actuelle</span><strong>{fmt(nextDay(tests[p.key]),true)} → aujourd’hui</strong><small>{daysBetween(nextDay(tests[p.key]),today)+1} jours d’actualité</small></div><div className="actions"><button onClick={()=>setTab('Révisions')}>Réviser</button><button className="secondary" onClick={()=>markTest(p.key)}>J’ai eu un test aujourd’hui</button></div></article>)}</div>
+          <div className="profGrid">{profs.map(p=><article className="profCard" key={p.key}>
+            <div className="profTop"><span className="number">{p.key==='qcm'?'01':'02'}</span><span className="softPill">{p.label}</span></div>
+            <h3>{p.name}</h3><p className="muted">{p.type}</p>
+            <div className="testDateLine"><span>Dernier test</span><strong>{fmt(tests[p.key])}</strong></div>
+            <div className="period"><span>Matière actuelle</span><strong>{fmt(nextDay(tests[p.key]),true)} → aujourd’hui</strong><small>{daysBetween(nextDay(tests[p.key]),today)+1} jours d’actualité</small></div>
+            {editingTestDate===p.key&&<div className="dateEditor"><label>📌 Corriger la date du test<input type="date" max={today} value={testDateDraft} onChange={e=>setTestDateDraft(e.target.value)}/></label><div><button onClick={()=>saveTestDate(p.key)} disabled={!testDateDraft||testDateDraft>today}>Enregistrer</button><button className="secondary" onClick={()=>setEditingTestDate(null)}>Annuler</button></div></div>}
+            <div className="actions"><button onClick={()=>setTab('Révisions')}>Réviser</button><button className="secondary" onClick={()=>markTest(p.key)}>J’ai eu un test aujourd’hui</button><button className="pinDateBtn" onClick={()=>openTestDateEditor(p.key)}>📌 Modifier la date</button></div>
+          </article>)}</div>
         </section>
 
         <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Installe l’app puis choisis l’heure à laquelle tu veux recevoir ton rappel.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">Version actuelle : le rappel fonctionne quand l’app ou son service est actif. La notification fiable même app fermée sera branchée au serveur dans l’étape suivante.</small></section>
