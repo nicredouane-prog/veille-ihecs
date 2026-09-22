@@ -1,9 +1,16 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.7';
+const APP_VERSION='v3.8';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
+const fmtNews = value => {
+  const d=new Date(value);
+  if(Number.isNaN(d.getTime())) return '';
+  const date=new Intl.DateTimeFormat('fr-BE',{day:'2-digit',month:'short',timeZone:'Europe/Brussels'}).format(d);
+  const time=new Intl.DateTimeFormat('fr-BE',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/Brussels'}).format(d);
+  return `${date} · ${time}`;
+};
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
 const daysBetween = (a,b) => Math.max(0,Math.ceil((new Date(b)-new Date(a))/86400000));
@@ -82,6 +89,9 @@ function App(){
   const [sourceStatus,setSourceStatus]=useState([]);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const [lastUpdatedAt,setLastUpdatedAt]=useState(null);
+  const [refreshing,setRefreshing]=useState(false);
+  const lastFetchRef=useRef(0);
   const [query,setQuery]=useState('');
   const [category,setCategory]=useState('Toutes');
   const [dateFilter,setDateFilter]=useState(()=>localStorage.getItem('veille-date-filter')||'all');
@@ -142,24 +152,30 @@ function App(){
     return()=>clearInterval(timer);
   },[reminderEnabled,reminderTime,notifStatus,today]);
 
-  const loadNews=async()=>{
-    setLoading(true); setError('');
+  const loadNews=async(sinceOverride=null,{silent=false}={})=>{
+    if(silent) setRefreshing(true); else setLoading(true);
+    setError('');
+    const since = sinceOverride===null ? filterSince : sinceOverride;
     try{
-      const r=await fetch('/api/news?days=120');
+      const qs=new URLSearchParams();
+      if(since) qs.set('since',since); else qs.set('days','180');
+      const r=await fetch(`/api/news?${qs.toString()}`,{cache:'no-store'});
       if(!r.ok) throw new Error(`Erreur ${r.status}`);
       const data=await r.json();
       setNews(data.items||[]); setSourceStatus(data.sources||[]);
+      setLastUpdatedAt(data.generatedAt||new Date().toISOString());
+      lastFetchRef.current=Date.now();
       try{
-        const sr=await fetch('/api/community-news');
+        const sr=await fetch('/api/community-news',{cache:'no-store'});
         if(sr.ok){
           const rows=await sr.json();
           setSharedNews((Array.isArray(rows)?rows:[]).map(x=>({id:`shared-${x.id||x.created_at}`,title:x.title,description:x.description||'',summaryShort:x.summary_short||'',summaryLong:x.summary_long||'',context:x.context||'',category:x.category||'Belgique / Société',source:x.source||'Ajout partagé',url:x.url,image:x.image||'',date:x.created_at||new Date().toISOString(),quizPrompt:x.quiz_prompt||'',quizAnswer:x.quiz_answer||'',shared:true})));
         }
       }catch{}
     }catch(e){ setError("Impossible de charger les flux d'actualité pour le moment."); }
-    finally{ setLoading(false); }
+    finally{ setLoading(false); setRefreshing(false); }
   };
-  useEffect(()=>{loadNews()},[]);
+
 
   const profs=useMemo(()=>[
     {key:'qcm',name:'Mr Gras',label:'QCM & personnalités',type:'QCM à une seule réponse + reconnaissance de personnes'},
@@ -204,6 +220,23 @@ function App(){
     if(dateFilter==='custom') return customSince||'';
     return '';
   },[dateFilter,customSince,tests]);
+
+  // Recharge la fenêtre correspondant au filtre de date : le nombre d'articles
+  // vient réellement de la période choisie, au lieu d'être calculé sur un lot fixe de titres récents.
+  useEffect(()=>{ loadNews(filterSince); },[filterSince]);
+
+  // Veille active tant que l'application est ouverte : actualisation périodique + retour au premier plan.
+  useEffect(()=>{
+    const timer=setInterval(()=>loadNews(filterSince,{silent:true}),180000);
+    const onVisible=()=>{
+      if(document.visibilityState==='visible' && Date.now()-lastFetchRef.current>60000){
+        loadNews(filterSince,{silent:true});
+      }
+    };
+    document.addEventListener('visibilitychange',onVisible);
+    window.addEventListener('focus',onVisible);
+    return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('focus',onVisible)};
+  },[filterSince]);
   const filtered=useMemo(()=>combinedNews.filter(n=>{
     const q=query.toLowerCase().trim();
     const dateOk=!filterSince || (n.date||'').slice(0,10)>=filterSince;
@@ -564,7 +597,7 @@ function App(){
     </aside>
 
     <main>
-      <header className="topbar"><div><p className="eyebrow">IHECS Test Actus <span className="versionBadge">{APP_VERSION}</span></p><h1>{tab}</h1></div><button className="iconBtn" onClick={loadNews} title="Actualiser">↻</button></header>
+      <header className="topbar"><div><p className="eyebrow">IHECS Test Actus <span className="versionBadge">{APP_VERSION}</span></p><h1>{tab}</h1></div><div className="refreshGroup"><span className="refreshStamp">{refreshing?'Mise à jour…':lastUpdatedAt?`Mis à jour à ${new Intl.DateTimeFormat('fr-BE',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'Europe/Brussels'}).format(new Date(lastUpdatedAt))}`:''}</span><button className="iconBtn" onClick={()=>loadNews(filterSince,{silent:true})} title="Actualiser maintenant">↻</button></div></header>
 
       {tab==='Accueil'&&<>
         <section className="hero">
@@ -602,7 +635,7 @@ function App(){
             {dateFilter==='custom'&&<input type="date" value={customSince} max={today} onChange={e=>setCustomSince(e.target.value)}/>} 
           </div>
         </div>
-        <div className="sourceStrip"><strong>Sources suivies</strong>{sourceStatus.map(s=><span key={s.name} className={s.ok?'sourceOk':'sourceOff'}>{s.name}</span>)}</div>
+        <div className="sourceStrip"><strong>Sources suivies</strong>{sourceStatus.map(s=><span key={s.name} className={s.ok?'sourceOk':'sourceOff'}>{s.name}{s.ok&&typeof s.count==='number'?` · ${s.count}`:''}</span>)}</div>
         <div className="resultCount">{filtered.length} actualité{filtered.length>1?'s':''}{filterSince?' dans cette période':''}</div>
         {loading?<Skeleton/>:error?<Empty text={error}/>:filtered.length===0?<Empty text="Aucune actualité trouvée pour cette période."/>:<div className="newsGrid">{filtered.map(n=><NewsCard key={n.id} n={n} onOpen={()=>setSelected(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
       </section>}
@@ -657,8 +690,8 @@ function App(){
       </section>}
     </main>
 
-    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmt(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
-        {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmt(r.date,true)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>setSelected(r)}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}
+    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmtNews(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
+        {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmtNews(r.date)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>setSelected(r)}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}
         <div className="modalActions"><a className="primaryLink" href={selected.url} target="_blank" rel="noreferrer">Lire l’article source ↗</a><button className="secondary" onClick={()=>toggleSaved(selected.id)}>{saved.includes(selected.id)?'★ Sauvegardé':'☆ Sauvegarder'}</button></div></article></div>})()}
   </div>
 }
@@ -683,8 +716,8 @@ function SmartImage({item,className='',alt='',fallback=null}){
   return fallback;
 }
 
-function NewsRow({n,index,onOpen,saved,onSave}){return <article className="headline"><span className="rank">{String(index).padStart(2,'0')}</span><div className="headlineBody" onClick={onOpen}><div className="meta"><b>{n.source}</b><span>{n.category}</span><span>{fmt(n.date,true)}</span></div><h3>{n.title}</h3></div><button className="saveBtn" onClick={onSave}>{saved?'★':'☆'}</button></article>}
-function NewsCard({n,onOpen,saved,onSave}){const sum=displaySummaries(n);return <article className="newsCard"><SmartImage item={n} className="newsCardImage" alt="Illustration de l’actualité"/><div className="cardMeta"><span>{n.source}</span><span>{fmt(n.date,true)}</span></div><button className="saveBtn floating" onClick={onSave}>{saved?'★':'☆'}</button><div className="categoryLine">{n.category}</div><h3 onClick={onOpen}>{n.title}</h3><p>{sum.short||'Ouvrir la fiche pour accéder à la source.'}</p><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button></article>}
+function NewsRow({n,index,onOpen,saved,onSave}){return <article className="headline"><span className="rank">{String(index).padStart(2,'0')}</span><div className="headlineBody" onClick={onOpen}><div className="meta"><b>{n.source}</b><span>{n.category}</span><span>{fmtNews(n.date)}</span></div><h3>{n.title}</h3></div><button className="saveBtn" onClick={onSave}>{saved?'★':'☆'}</button></article>}
+function NewsCard({n,onOpen,saved,onSave}){const sum=displaySummaries(n);return <article className="newsCard"><SmartImage item={n} className="newsCardImage" alt="Illustration de l’actualité"/><div className="cardMeta"><span>{n.source}</span><span>{fmtNews(n.date)}</span></div><button className="saveBtn floating" onClick={onSave}>{saved?'★':'☆'}</button><div className="categoryLine">{n.category}</div><h3 onClick={onOpen}>{n.title}</h3><p>{sum.short||'Ouvrir la fiche pour accéder à la source.'}</p><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button></article>}
 function Feedback({ok,item}){return <div className={`feedback ${ok?'good':'wrong'}`}><strong>{ok?'Bonne réponse.':'Pas cette fois.'}</strong><p>À retenir : <b>{item.title}</b></p><a href={item.url} target="_blank" rel="noreferrer">Revoir l’actualité ↗</a></div>}
 function Skeleton(){return <div className="skeletonWrap">{[1,2,3,4].map(i=><div className="skeleton" key={i}/>)}</div>}
 function Empty({text}){return <div className="empty"><div>—</div><p>{text}</p></div>}

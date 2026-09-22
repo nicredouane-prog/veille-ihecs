@@ -69,29 +69,30 @@ async function fetchText(url){
   const c=new AbortController(); const timer=setTimeout(()=>c.abort(),8000);
   try{const r=await fetch(url,{signal:c.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 IHECS-Test-Actus/3.1'}});if(!r.ok) throw new Error(`HTTP ${r.status}`);return await r.text()}finally{clearTimeout(timer)}
 }
-const googleUrl=(q,days)=>`https://news.google.com/rss/search?q=${encodeURIComponent(`${q} when:${days}d`)}&hl=fr&gl=BE&ceid=BE:fr`;
+const googleUrl=(q,days,sinceDate='')=>{ const dateClause=sinceDate?` after:${sinceDate}`:` when:${days}d`; return `https://news.google.com/rss/search?q=${encodeURIComponent(`${q}${dateClause}`)}&hl=fr&gl=BE&ceid=BE:fr`; };
 
 export default async function handler(req,res){
-  res.setHeader('Cache-Control','s-maxage=300, stale-while-revalidate=900');
-  const days=Math.max(1,Math.min(180,Number(String(req.query?.days||'90'))||90));
-  const since=Date.now()-days*86400000;
+  res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=180');
+  const requestedSince=String(req.query?.since||'').match(/^\d{4}-\d{2}-\d{2}$/)?.[0]||'';
+  const days=Math.max(1,Math.min(365,Number(String(req.query?.days||'180'))||180));
+  const since=requestedSince ? new Date(`${requestedSince}T00:00:00Z`).getTime() : Date.now()-days*86400000;
   const jobs=SOURCES.map(async source=>{
     const feeds=[]; const errors=[];
-    const urls=[...(source.official?[source.official]:[]),...source.queries.map(q=>googleUrl(q,days))];
+    const urls=[...(source.official?[source.official]:[]),...source.queries.map(q=>googleUrl(q,days,requestedSince))];
     for(const url of urls){
       try{const xml=await fetchText(url); feeds.push(...parseFeed(xml,source.name));}catch(e){errors.push(e.message)}
     }
     // Si les recherches site: n'ont rien donné, tenter simplement le nom du média.
     if(!feeds.length){
-      try{const xml=await fetchText(googleUrl(`\"${source.name}\"`,days));feeds.push(...parseFeed(xml,source.name));}catch(e){errors.push(e.message)}
+      try{const xml=await fetchText(googleUrl(`\"${source.name}\"`,days,requestedSince));feeds.push(...parseFeed(xml,source.name));}catch(e){errors.push(e.message)}
     }
     const seen=new Set();
-    const items=feeds.filter(x=>{const k=x.title.toLowerCase().replace(/[^a-zà-ÿ0-9]+/g,' ').trim().slice(0,120);if(seen.has(k))return false;seen.add(k);return true;}).slice(0,45);
+    const items=feeds.filter(x=>{const k=x.title.toLowerCase().replace(/[^a-zà-ÿ0-9]+/g,' ').trim().slice(0,120);if(seen.has(k))return false;seen.add(k);return true;}).slice(0,100);
     return {source:source.name,ok:items.length>0,error:items.length?null:errors.join(' / ')||'Aucun article',items};
   });
   const results=await Promise.all(jobs);
   const all=results.flatMap(r=>r.items).filter(x=>new Date(x.date).getTime()>=since).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const seen=new Set();
-  const items=all.filter(item=>{const key=item.title.toLowerCase().replace(/[^a-zà-ÿ0-9]+/g,' ').trim().slice(0,115);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,260);
-  res.status(200).json({generatedAt:new Date().toISOString(),days,items,sources:results.map(r=>({name:r.source,ok:r.ok,error:r.error||null,count:r.items.length}))});
+  const items=all.filter(item=>{const key=item.title.toLowerCase().replace(/[^a-zà-ÿ0-9]+/g,' ').trim().slice(0,115);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,850);
+  res.status(200).json({generatedAt:new Date().toISOString(),days,since:requestedSince||null,items,sources:results.map(r=>({name:r.source,ok:r.ok,error:r.error||null,count:r.items.length}))});
 }
