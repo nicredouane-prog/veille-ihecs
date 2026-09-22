@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v4.0';
+const APP_VERSION='v4.3';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
   const d=new Date(value);
@@ -69,7 +69,18 @@ function relatedScore(a,b){
 }
 
 const nav = [
-  ['Accueil','⌂'],['Actualités','◉'],['Ajouter','＋'],['Révisions','✓'],['Tests fictifs','✎'],['Mes tests','▣']
+  ['Accueil','⌂'],['Actualités','◉'],['Ajouter','＋'],['Révisions','✓'],['Tests fictifs','✎'],['Mes tests','▣'],['Tutoriel','?']
+];
+
+const tutorialSteps=[
+  {title:'Bienvenue dans IHECS Test Actus',text:'L’app rassemble l’actualité utile à tes tests, organise la matière depuis le dernier test de chaque prof et te permet de réviser avec des questions adaptées.',tab:'Accueil'},
+  {title:'Tes dates de test',text:'Sur Accueil et Mes tests, indique ou corrige la date du dernier test de Mr Gras et de Mr Leconte. La matière à connaître commence automatiquement le lendemain.',tab:'Accueil'},
+  {title:'Filtrer l’actualité',text:'Dans Actualités, affiche tout, uniquement ce qui est paru depuis le test de Mr Gras, depuis celui de Mr Leconte, ou depuis une date précise.',tab:'Actualités'},
+  {title:'Comprendre une actu',text:'Ouvre une fiche pour obtenir un résumé express, un résumé clair, le contexte, la source originale et les articles liés plus récents sur le même sujet.',tab:'Actualités'},
+  {title:'Réviser comme au test',text:'Les révisions de Mr Gras privilégient des QCM ou flashcards factuels. Mr Leconte utilise des photos d’actualité à expliquer. Les sujets sont mélangés pour éviter les répétitions.',tab:'Tests fictifs'},
+  {title:'Ajouter une information',text:'Tu peux coller le lien d’un article dans Ajouter. L’app prépare une fiche et peut intégrer cette actualité aux révisions après validation.',tab:'Ajouter'},
+  {title:'Sur téléphone',text:'Installe l’app depuis ton navigateur pour l’utiliser comme une vraie application. Tu peux aussi programmer ton rappel quotidien depuis l’accueil.',tab:'Accueil'},
+  {title:'Tu es prêt',text:'Le tutoriel ne s’affichera plus automatiquement. Tu pourras le relancer à tout moment depuis l’onglet Tutoriel.',tab:'Tutoriel'}
 ];
 
 function App(){
@@ -117,6 +128,8 @@ function App(){
   const [installed,setInstalled]=useState(()=>window.matchMedia?.('(display-mode: standalone)').matches||false);
   const [editingTestDate,setEditingTestDate]=useState(null);
   const [testDateDraft,setTestDateDraft]=useState('');
+  const [tutorialOpen,setTutorialOpen]=useState(()=>localStorage.getItem('ihecs-tutorial-seen-v1')!=='1');
+  const [tutorialStep,setTutorialStep]=useState(0);
   const today=isoToday();
 
   useEffect(()=>localStorage.setItem('veille-tests',JSON.stringify(tests)),[tests]);
@@ -293,21 +306,31 @@ function App(){
     return a.length>=2 && a.length<=85 && !/^\[|à trouver|information à revoir/i.test(a);
   };
 
-  const actorKind=(value='',item={})=>{
+  const genericActorStart=/^(de |du |des |un |une |le |la |les |l['’]|tout |toute |plus |moins |nouveau|nouvelle|nouvelles|transport|économie|accord|décision|mesure|enquête|enquêtes|rouages|photo|vidéo)/i;
+  const looksLikePerson=(value='')=>{
     const a=cleanAnswerText(value);
-    const low=a.toLowerCase();
-    if(/\b(ministre|président|présidente|député|députée|secrétaire d['’]état|bourgmestre|commissaire|coach|entraîneur|acteur|actrice|chanteur|chanteuse)\b/.test(low)) return 'person';
-    if(/\b(gouvernement|parlement|commission|parti|police|armée|aéroport|airport|skeyes|eurocontrol|université|banque|club|fédération|entreprise|groupe|compagnie|association|syndicat|onu|otan|ue|commission européenne)\b/.test(low)) return 'organisation';
-    if(item?.category==='Culture' && /album|groupe|festival|label|film|série/i.test(`${item?.title||''} ${a}`)) return 'organisation';
-    const caps=(a.match(/\b[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+\b/g)||[]).length;
-    if(caps>=2 && caps<=4 && !/album|festival|airways|airlines|airport|university|company|belgium/i.test(a)) return 'person';
-    return 'organisation';
+    if(!a || genericActorStart.test(a) || /[,:;!?]/.test(a)) return false;
+    const words=a.split(/\s+/).filter(Boolean);
+    if(words.length<2 || words.length>4) return false;
+    return words.every(w=>/^[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+$/.test(w) || /^(de|du|van|von|der|den|d['’])$/i.test(w));
   };
+  const knownOrg=/\b(Skeyes|Eurocontrol|Ryanair|Brussels Airport(?: Company)?|STIB|SNCB|TEC|De Lijn|Commission européenne|Parlement européen|Parlement bruxellois|gouvernement(?: belge| fédéral| wallon| flamand| bruxellois)?|police fédérale|ONU|OTAN|UEFA|FIFA|OpenAI|Anthropic|Mistral AI|Proximus|Orange Belgium|Digi Belgium|Telenet|Arianespace|Ariane Espace|ESA|NASA)\b/i;
+  const looksLikeOrganisation=(value='')=>{
+    const a=cleanAnswerText(value);
+    if(!a || genericActorStart.test(a) || /["“”]/.test(a) || a.length>70) return false;
+    if(knownOrg.test(a)) return true;
+    if(/\b(commission|parlement|gouvernement|parti|police|armée|université|banque|club|fédération|entreprise|groupe|compagnie|association|syndicat|aéroport|airport|airlines|airways|laboratoire|agence|ministère)\b/i.test(a) && /^[A-ZÀ-ÖØ-Ý]/.test(a)) return true;
+    // Acronymes ou marques clairement capitalisées.
+    if(/^[A-Z0-9][A-Za-z0-9À-ÿ&'’.-]*(?:\s+[A-Z0-9][A-Za-z0-9À-ÿ&'’.-]*){0,4}$/.test(a) && !/^(Transport|Économie|Accord|Décision|Mesure|Nouvelles?|Enquêtes?)\b/i.test(a)) return true;
+    return false;
+  };
+  const actorKind=(value='',item={})=> looksLikePerson(value)?'person':looksLikeOrganisation(value)?'organisation':'unknown';
   const clipDecision=(value='',max=125)=>{
     let x=cleanAnswerText(value)
       .replace(/^['"“”]+|['"“”]+$/g,'')
       .replace(/\s+(?:selon|d'après)\s+.+$/i,'')
       .replace(/\s*\([^)]*VID[ÉE]O[^)]*\)\s*$/i,'')
+      .replace(/\s+[–—-]\s+(?:Trends-Tendances|RTBF|RTL info|La Libre|Le Soir|BX1|La DH|DHnet|Le Vif|L'Avenir|Sudinfo).*$/i,'')
       .trim();
     if(x.length>max){
       const cut=x.slice(0,max);
@@ -316,97 +339,69 @@ function App(){
     return x;
   };
   const makeFact=(item)=>{
-    // v4.0 : la question doit pouvoir se lire seule. On ne génère plus de formulations
-    // génériques du type « quel acteur dans cette actualité ? » ni de réponses hétérogènes.
+    // v4.1 : on ne garde que les questions dont la réponse est extraite avec forte confiance.
+    // Aucun acteur générique, aucun bout de phrase, aucune citation comme réponse.
     if(!item?.title || badQuizTitle(item.title)) return null;
     if(item.quizPrompt && item.quizAnswer && validShortAnswer(item.quizAnswer)){
-      return {question:item.quizPrompt,answer:cleanAnswerText(item.quizAnswer),type:'text',answerKind:'event',quality:10};
+      const a=cleanAnswerText(item.quizAnswer);
+      return {question:item.quizPrompt,answer:a,type:'text',answerKind:'event',quality:10};
     }
     const t=cleanTitle(item.title||'');
     let m;
 
-    // Relations diplomatiques : formulation autonome et testable.
+    // Deux pays / acteurs nommés qui font une action ensemble.
     if((m=t.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][^,:;]{1,34}?)\s+et\s+([A-ZÀ-ÖØ-Ý][^,:;]{1,34}?)\s+(rétablissent|rompent|signent|annoncent|concluent|adoptent|ouvrent|ferment)\s+(.+)$/i))){
-      const a=cleanAnswerText(m[1]), b=cleanAnswerText(m[2]), action=m[3].toLowerCase(), object=clipDecision(m[4],90);
-      if(validShortAnswer(a)&&validShortAnswer(b)) return {question:`Quels deux acteurs ${action} ${object||'cette mesure'} ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:10};
+      const a=cleanAnswerText(m[1]), b=cleanAnswerText(m[2]), action=m[3].toLowerCase(), object=clipDecision(m[4],95);
+      if(validShortAnswer(a)&&validShortAnswer(b)&&!genericActorStart.test(a)&&!genericActorStart.test(b)) return {question:`Quels deux acteurs ${action} ${object} ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:10};
     }
 
-    // Titre « contexte : fait ». Le fait après les deux-points est prioritaire.
-    const parts=t.split(':');
-    const prefix=parts.length>1?parts[0].trim():'';
-    const core=(parts.length>1?parts.slice(1).join(':').trim():t).replace(/^['"“”]+|['"“”]+$/g,'').trim();
+    // « Nom Prénom annonce/propose/confirme... » : personnes uniquement si forme nominale fiable.
+    if((m=t.match(/(?:^|:\s*)([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+(?:de|du|van|von|der|den|d['’]))?\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){0,1})\s+(annonce|confirme|dément|propose|réclame|demande|présente|dévoile|publie|signe)\s+(.+)$/i))){
+      const person=cleanAnswerText(m[1]), verb=m[2].toLowerCase(), object=clipDecision(m[3],115);
+      if(looksLikePerson(person)&&object.length>=10) return {question:`Qui ${verb} ${object} ?`,answer:person,type:'entity',answerKind:'person',quality:10};
+    }
 
-    // Personne/organisation qui annonce, propose, confirme, dément, réclame, décide, etc.
-    if((m=core.match(/^(.{2,70}?)\s+(annonce|annoncent|propose|proposent|confirme|confirment|dément|démentent|réclame|réclament|demande|demandent|décide|décident|adopte|adoptent|approuve|approuvent|rejette|rejettent|suspend|suspendent|supprime|suppriment|autorise|autorisent|interdit|interdisent|lance|lancent|présente|présentent|dévoile|dévoilent|publie|publient|rouvre|rouvrent|ferme|ferment|signe|signent)\s+(.+)$/i))){
+    // Organisation connue ou clairement nommée + verbe d'action.
+    if((m=t.match(/^(.{2,70}?)\s+(annonce|annoncent|propose|proposent|confirme|confirment|dément|démentent|réclame|réclament|demande|demandent|décide|décident|adopte|adoptent|approuve|approuvent|rejette|rejettent|suspend|suspendent|supprime|suppriment|autorise|autorisent|interdit|interdisent|lance|lancent|présente|présentent|dévoile|dévoilent|publie|publient|rouvre|rouvrent|ferme|ferment|signe|signent)\s+(.+)$/i))){
       let actor=cleanAnswerText(m[1]).replace(/^(?:la|le|les|l['’])\s+/i,'').trim();
-      const verb=m[2].toLowerCase(); const decision=clipDecision(m[3]);
-      if(validShortAnswer(actor)&&decision.length>=8 && !/^(du|de la|un|une)\s+(changement|nouveau|nouvelle|rebondissement)/i.test(actor)){
-        const kind=actorKind(actor,item);
-        let q;
-        if(kind==='person') q=`Qui ${verb} ${decision} ?`;
-        else q=`Quelle organisation ${verb} ${decision} ?`;
+      const verb=m[2].toLowerCase(), decision=clipDecision(m[3],115), kind=actorKind(actor,item);
+      if(kind!=='unknown'&&decision.length>=10){
+        const q=kind==='person'?`Qui ${verb} ${decision} ?`:`Quelle organisation ${verb} ${decision} ?`;
         return {question:q,answer:actor,type:'entity',answerKind:kind,quality:10};
       }
     }
 
-    // Même logique si l'acteur est placé avant les deux-points.
-    if(prefix && (m=prefix.match(/^(.{2,65}?)\s+(annonce|propose|confirme|dément|réclame|demande|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit|lance|présente|dévoile|publie|rouvre|ferme|signe)\s+(.+)$/i))){
-      const actor=cleanAnswerText(m[1]).replace(/^(?:la|le|les|l['’])\s+/i,'').trim();
-      const verb=m[2].toLowerCase(); const decision=clipDecision(m[3]);
-      if(validShortAnswer(actor)&&decision.length>=8){
-        const kind=actorKind(actor,item);
-        return {question:`${kind==='person'?'Qui':'Quelle organisation'} ${verb} ${decision} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
-      }
-    }
-
-    // « X sur Y : citation » → on teste X avec un sujet explicite.
+    // « X sur Y : ... » uniquement si X est une vraie personne / organisation.
     if((m=t.match(/^(.{2,60}?)\s+sur\s+([^:]{6,100})\s*:/i))){
-      const actor=cleanAnswerText(m[1]), subject=clipDecision(m[2],90);
-      if(validShortAnswer(actor)&&subject.length>5){
-        const kind=actorKind(actor,item);
+      const actor=cleanAnswerText(m[1]), subject=clipDecision(m[2],95), kind=actorKind(actor,item);
+      if(kind!=='unknown'&&subject.length>8){
         return {question:`${kind==='person'?'Qui s’est exprimé':'Quelle organisation s’est exprimée'} sur ${subject.toLowerCase()} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
       }
     }
 
-    // « Il y a accord : Loubna Azghoud annonce... » et variantes : le motif peut rester dans le titre complet.
-    if((m=t.match(/(?:^|:\s*)([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(annonce|confirme|dément|propose|réclame|demande)\s+(.+)$/i))){
-      const person=cleanAnswerText(m[1]), verb=m[2].toLowerCase(), object=clipDecision(m[3]);
-      if(validShortAnswer(person)&&object.length>=8) return {question:`Qui ${verb} ${object} ?`,answer:person,type:'entity',answerKind:'person',quality:10};
-    }
-
-    // Prix / récompenses / victoires : question centrée sur l'information réellement mémorisable.
+    // Prix / récompenses : sujet explicite + distinction explicite.
     if((m=t.match(/^(.+?)\s+(?:remporte|gagne|reçoit|décroche|obtient)\s+(.+)$/i))){
-      const subject=cleanAnswerText(m[1]), prize=clipDecision(m[2],105);
-      if(validShortAnswer(subject)&&prize.length>=4) return {question:`Quelle récompense ou distinction ${subject} a-t-il obtenue ?`,answer:prize,type:'text',answerKind:'award',quality:10};
+      const subject=cleanAnswerText(m[1]), prize=clipDecision(m[2],100);
+      if(validShortAnswer(subject)&&prize.length>=5&&!genericActorStart.test(subject)) return {question:`Quelle récompense ou distinction ${subject} a-t-il obtenue ?`,answer:prize,type:'text',answerKind:'award',quality:10};
     }
 
-    // Nominations / nouvelles fonctions.
+    // Nominations / fonctions.
     if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient|est élu|est élue|est désigné|est désignée)\s+(.+)$/i))){
       const person=cleanAnswerText(m[1]), role=clipDecision(m[2],100);
-      if(validShortAnswer(person)&&role.length>=4) return {question:`Quelle fonction ou responsabilité ${person} obtient-il dans cette actualité ?`,answer:role,type:'text',answerKind:'role',quality:10};
+      if(looksLikePerson(person)&&role.length>=5) return {question:`Quelle fonction ${person} obtient-il dans cette actualité ?`,answer:role,type:'text',answerKind:'role',quality:10};
     }
 
-    // Grèves : si aucune décision plus intéressante n'a été détectée, on teste l'organisation touchée.
+    // Grève : uniquement nom d'organisation fiable après « chez ».
     if((m=t.match(/(?:gr[eè]ve|mouvement social|arr[eê]t de travail).*?\bchez\s+([^:;,–—-]{2,55})/i))){
       const actor=cleanAnswerText(m[1]);
-      if(validShortAnswer(actor)) return {question:`Quelle organisation est touchée par le mouvement de grève mentionné dans ce titre ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
+      if(looksLikeOrganisation(actor)) return {question:`Quelle organisation est touchée par ce mouvement de grève ?`,answer:actor,type:'entity',answerKind:'organisation',quality:9};
     }
 
-    // Aéroport : uniquement si le lieu est réellement le fait distinctif.
+    // Aéroport : lieu explicite uniquement.
     if((m=t.match(/\ba[ée]roport de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ -]{2,35})/))){
       const place=cleanAnswerText(m[1].replace(/\s+(?:pr[eé]voit|annonce|sera|est|a|fait)\b.*$/i,''));
-      if(validShortAnswer(place)) return {question:`Quel aéroport belge est concerné par cette perturbation du trafic aérien ?`,answer:place,type:'entity',answerKind:'place',quality:8};
+      if(validShortAnswer(place)&&/^[A-ZÀ-ÖØ-Ý]/.test(place)) return {question:`Quel aéroport belge est directement concerné par cette actualité ?`,answer:place,type:'entity',answerKind:'place',quality:9};
     }
-
-    // Lancement / publication : utile pour culture, tech, économie.
-    if((m=t.match(/^(.+?)\s+(?:lance|présente|dévoile|publie)\s+(.+)$/i))){
-      const actor=cleanAnswerText(m[1]), object=clipDecision(m[2]);
-      if(validShortAnswer(actor)&&object.length>=8){
-        const kind=actorKind(actor,item);
-        return {question:`${kind==='person'?'Qui':'Quelle organisation'} est à l’origine de ${object} ?`,answer:actor,type:'entity',answerKind:kind,quality:9};
-      }
-    }
-
     return null;
   };
   const withLead=(item,fact)=> fact ? ({...fact,lead:questionLead(item,fact.answer)}) : null;
@@ -428,21 +423,30 @@ function App(){
   const curatedDistractors=(fact)=>{
     const q=(fact.question||'').toLowerCase();
     const a=(fact.answer||'').toLowerCase();
-    if(q.includes('aéroport')) return ['Brussels Airport','Aéroport de Liège','Aéroport d’Ostende','Aéroport de Charleroi'].filter(x=>x.toLowerCase()!==a);
-    if(q.includes('entreprise')||q.includes('organisation')){
-      if(/orange|digi|proximus|telenet|télécom|telecom/.test((fact.item?.title||'')+' '+a)) return ['Orange Belgium','Proximus','Telenet','Digi Belgium'].filter(x=>x.toLowerCase()!==a);
-      if(/skeyes|aéroport|aviation|vol/.test((fact.item?.title||'')+' '+a)) return ['Skeyes','Brussels Airport Company','Eurocontrol','Ryanair'].filter(x=>x.toLowerCase()!==a);
+    if(fact.answerKind==='place' && q.includes('aéroport')) return ['Brussels Airport','Liège Airport','Aéroport d’Ostende','Aéroport de Charleroi'].filter(x=>x.toLowerCase()!==a);
+    if(fact.answerKind==='organisation'){
+      const txt=((fact.item?.title||'')+' '+a).toLowerCase();
+      if(/skeyes|aéroport|aviation|vol/.test(txt)) return ['Skeyes','Brussels Airport Company','Eurocontrol','Ryanair'].filter(x=>x.toLowerCase()!==a);
+      if(/orange|digi|proximus|telenet|télécom|telecom/.test(txt)) return ['Orange Belgium','Proximus','Telenet','Digi Belgium'].filter(x=>x.toLowerCase()!==a);
+      if(/espace|ariane|aerospace|esa|nasa/.test(txt)) return ['Arianespace','ESA','NASA','AerospaceLab'].filter(x=>x.toLowerCase()!==a);
     }
     return [];
   };
+  const plausibleForKind=(value,kind)=>{
+    const v=shortOption(value); if(!v) return '';
+    if(kind==='person' && !looksLikePerson(v)) return '';
+    if(kind==='organisation' && !looksLikeOrganisation(v)) return '';
+    if(kind==='place' && !/^[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ -]{2,40}$/.test(v)) return '';
+    return v;
+  };
   const buildOptions=(fact,facts)=>{
-    if(!['entity','entity-pair','text'].includes(fact.type)) return [];
-    const answer=shortOption(fact.answer);
-    if(!answer) return [];
-    const curated=curatedDistractors(fact).map(shortOption).filter(Boolean);
+    if(!['entity','entity-pair'].includes(fact.type)) return [];
+    const answer=plausibleForKind(fact.answer,fact.answerKind);
+    if(!answer || fact.answerKind==='pair') return [];
+    const curated=curatedDistractors(fact).map(x=>plausibleForKind(x,fact.answerKind)).filter(Boolean);
     const sameKind=facts
       .filter(x=>x!==fact && x.answerKind===fact.answerKind)
-      .map(x=>shortOption(x.answer))
+      .map(x=>plausibleForKind(x.answer,fact.answerKind))
       .filter(x=>x && x.toLowerCase()!==answer.toLowerCase());
     const unique=[...new Set([...curated,...sameKind])].filter(x=>x.toLowerCase()!==answer.toLowerCase());
     if(unique.length<3) return [];
@@ -528,7 +532,7 @@ function App(){
     }else{
       // Une seule question par sujet dans la session, même si plusieurs médias parlent du même événement.
       const seenTopics=new Set();
-      let candidateFacts=facts.filter(x=>x.quality>=8);
+      let candidateFacts=facts.filter(x=>x.quality>=9 && x.question && x.answer && !/cette actualité|dans cette actualité|au sujet de|que faut-il retenir/i.test(x.question));
       if(mode==='people') candidateFacts=candidateFacts.filter(x=>x.answerKind==='person');
       const reliable=shuffle(candidateFacts).filter(f=>{
         if(!f.topicKey || seenTopics.has(f.topicKey)) return false;
@@ -536,7 +540,8 @@ function App(){
       });
       cards=[];
       for(const fact of reliable){
-        const options=fact.quality>=6?buildOptions(fact,reliable):[];
+        const options=buildOptions(fact,reliable);
+        // Un QCM n'existe que si les 4 propositions sont du même type. Sinon, flashcard précise.
         cards.push({...fact,kind:options.length===4?'mcq':'flash',options});
         if(cards.length>=count) break;
       }
@@ -625,6 +630,14 @@ function App(){
     const p=await Notification.requestPermission(); setNotifStatus(p);
     if(p==='granted') setReminderEnabled(true);
   };
+  const closeTutorial=()=>{ localStorage.setItem('ihecs-tutorial-seen-v1','1'); setTutorialOpen(false); setTutorialStep(0); };
+  const relaunchTutorial=()=>{ setTutorialStep(0); setTutorialOpen(true); };
+  const tutorialNext=()=>{
+    if(tutorialStep>=tutorialSteps.length-1){ closeTutorial(); return; }
+    setTutorialStep(i=>Math.min(i+1,tutorialSteps.length-1));
+  };
+  const tutorialPrev=()=>setTutorialStep(i=>Math.max(0,i-1));
+
   const installApp=async()=>{
     if(!installPrompt) return;
     await installPrompt.prompt();
@@ -698,7 +711,7 @@ function App(){
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>Jusqu’à 20 questions · Mr Gras</button><button className="secondary" onClick={()=>buildDeck(15,'essential')}>Test demain</button><button className="secondary" onClick={()=>buildDeck(10,'people')}>Personnalités</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions uniquement quand l’acteur, le lieu, la fonction ou le fait est identifié avec forte confiance. Aucun bout de phrase ne peut devenir une réponse. Les articles ambigus sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>Jusqu’à 20 questions · Mr Gras</button><button className="secondary" onClick={()=>buildDeck(15,'essential')}>Test demain</button><button className="secondary" onClick={()=>buildDeck(10,'people')}>Personnalités</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
         {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
@@ -731,7 +744,14 @@ function App(){
         <div className="testGrid">{profs.map(p=><article className="settingsCard" key={p.key}><span className="softPill">{p.label}</span><h2>{p.name}</h2><label>Date du dernier test d’actu</label><input type="date" value={tests[p.key]} max={today} onChange={e=>setTests(t=>({...t,[p.key]:e.target.value}))}/><div className="period compact"><span>Actualités à connaître depuis</span><strong>{fmt(nextDay(tests[p.key]))} → aujourd’hui</strong></div><button onClick={()=>markTest(p.key)}>Enregistrer un test aujourd’hui</button></article>)}</div>
         <div className="sectionTitle historyTitle"><div><p className="eyebrow">Archives</p><h2>Historique des tests</h2></div></div>{history.length===0?<Empty text="Aucun test archivé pour l’instant."/>:<div className="historyList">{history.map(h=><div key={h.id} className="historyItem"><div><strong>{h.prof==='qcm'?'Mr Gras — QCM':'Mr Leconte — Photo'}</strong><span>Test du {fmt(h.date)}</span></div><p>Matière archivée : {fmt(h.from)} → {fmt(h.to)}</p></div>)}</div>}
       </section>}
+
+      {tab==='Tutoriel'&&<section className="noTop tutorialPage">
+        <div className="tutorialHero"><div><p className="eyebrow">Aide & prise en main</p><h2>Découvrir IHECS Test Actus</h2><p>Relance la présentation complète de l’application ou consulte rapidement les fonctions principales.</p></div><button className="submit" onClick={relaunchTutorial}>Relancer le tutoriel</button></div>
+        <div className="tutorialOverview">{tutorialSteps.slice(1,-1).map((step,i)=><article className="tutorialOverviewCard" key={step.title}><span>{String(i+1).padStart(2,'0')}</span><h3>{step.title}</h3><p>{step.text}</p><button className="textBtn left" onClick={()=>setTab(step.tab)}>Ouvrir {step.tab} →</button></article>)}</div>
+      </section>}
     </main>
+
+    {tutorialOpen&&<div className="tutorialBack" role="dialog" aria-modal="true" aria-label="Tutoriel IHECS Test Actus"><article className="tutorialModal"><div className="tutorialModalTop"><div><span className="tutorialStepCount">{tutorialStep+1} / {tutorialSteps.length}</span><div className="tutorialDots">{tutorialSteps.map((_,i)=><i key={i} className={i<=tutorialStep?'active':''}/>)}</div></div><button className="tutorialSkip" onClick={closeTutorial}>Passer</button></div><div className="tutorialVisual"><span>{nav.find(n=>n[0]===tutorialSteps[tutorialStep].tab)?.[1]||'•'}</span></div><p className="eyebrow">Présentation de l’app</p><h2>{tutorialSteps[tutorialStep].title}</h2><p className="tutorialText">{tutorialSteps[tutorialStep].text}</p><div className="tutorialActions">{tutorialStep>0?<button className="secondary" onClick={tutorialPrev}>← Précédent</button>:<span/>}<button className="secondary" onClick={()=>{setTab(tutorialSteps[tutorialStep].tab);setTutorialOpen(false)}}>Voir cette section</button><button className="submit" onClick={tutorialNext}>{tutorialStep===tutorialSteps.length-1?'Terminer':'Suivant →'}</button></div></article></div>}
 
     {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmtNews(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
         {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmtNews(r.date)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>setSelected(r)}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}

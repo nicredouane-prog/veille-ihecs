@@ -49,3 +49,95 @@
 @media(max-width:720px){.profCard .actions{display:grid;grid-template-columns:1fr 1fr}.profCard .actions .pinDateBtn{grid-column:1/-1}.testDateLine{align-items:flex-start;flex-direction:column}.dateEditor>div{display:grid;grid-template-columns:1fr 1fr}}
 
 .refreshGroup{display:flex;align-items:center;gap:10px}.refreshStamp{font-size:12px;color:#8c837a;white-space:nowrap}@media(max-width:700px){.refreshStamp{display:none}}
+
+
+/* v4.2 — optimisation téléphone */
+@media (max-width: 720px){
+  html,body{overflow-x:hidden}
+  body{background:#f4f2ed}
+  main{padding:14px 12px calc(96px + env(safe-area-inset-bottom));max-width:none}
+  .topbar{position:sticky;top:0;z-index:15;background:#f4f2ed;padding:8px 0 12px;margin:0 0 10px}
+  .topbar h1{font-size:25px;line-height:1.02}
+  .eyebrow{font-size:9px;letter-spacing:.12em}
+  .iconBtn{width:42px;height:42px;font-size:19px;background:#fff}
+  .sidebar{padding:6px 6px calc(8px + env(safe-area-inset-bottom));background:rgba(18,18,18,.98);backdrop-filter:blur(10px)}
+  .sidebar nav{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}
+  .sidebar nav button{min-height:58px;padding:7px 2px 8px;border-radius:12px;font-size:8px;font-weight:700;letter-spacing:-.01em;line-height:1.1}
+  .sidebar nav button span{font-size:17px;line-height:1}
+  .sidebar nav button.active{background:#262626;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04)}
+
+  .toolbar{gap:8px}
+  .search,.toolbar select{border-radius:12px;background:#fff}
+  .search{padding:0 10px}
+  .search input,.toolbar select{min-height:48px;font-size:16px}
+
+  .periodFilter{padding:14px 14px 12px;border-radius:14px;gap:12px;margin-top:12px}
+  .periodFilterText strong{font-size:18px;line-height:1.2}
+  .periodChoices{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .periodChoices button{width:100%;min-height:42px;padding:10px 12px;font-size:13px;justify-content:center}
+  .periodChoices input[type=date]{grid-column:1/-1;width:100%;min-height:42px;font-size:16px;border-radius:10px}
+
+  .sourceStrip{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;gap:8px;padding:10px 0 4px;margin:0 -2px 4px;scrollbar-width:none}
+  .sourceStrip::-webkit-scrollbar{display:none}
+  .sourceStrip strong,.sourceStrip span{flex:0 0 auto}
+  .sourceStrip strong{padding-left:2px}
+  .sourceStrip span{padding:7px 10px;border-radius:999px;background:#fff}
+  .resultCount{margin:10px 0 12px;font-size:13px}
+
+  .newsGrid{grid-template-columns:1fr;gap:14px}
+  .newsCard{padding:16px;border-radius:16px;min-height:0;overflow:hidden;box-shadow:0 1px 0 rgba(0,0,0,.03)}
+  .newsCardImage{width:calc(100% + 32px);margin:-16px -16px 14px;height:180px}
+  .cardMeta{display:flex;flex-wrap:wrap;gap:6px 8px;font-size:10px}
+  .categoryLine{margin-top:10px;font-size:10px}
+  .newsCard h3{font-size:20px;line-height:1.12;margin:8px 0 10px}
+  .newsCard p{font-size:13px;line-height:1.5;-webkit-line-clamp:4}
+  .newsCard .textBtn{margin-top:12px;padding-top:2px}
+  .floating{top:12px;right:12px}
+
+  .headlineList,.profCard,.settingsCard,.examCard,.modal,.addCard,.draftCard{border-radius:16px}
+  .profTop{align-items:flex-start;gap:10px}
+  .profCard h3{font-size:24px}
+  .profCard>.muted{min-height:0}
+  .headline{padding:14px 12px;border-radius:0}
+  .headline h3{font-size:18px;line-height:1.2}
+  .meta{gap:8px;flex-wrap:wrap}
+
+  .modalBack{padding:0}
+  .modal{width:100%;max-width:none;min-height:100vh;max-height:100vh;border-radius:0;padding:22px 16px 92px;overscroll-behavior:contain}
+  .modalMeta{gap:6px}
+  .modalMeta span{font-size:9px}
+  .modal h2{font-size:28px;line-height:1.06;margin:18px 0}
+  .summaryLong p,.factBox p{font-size:14px;line-height:1.6}
+  .modalActions,.correctionLinks{display:grid;grid-template-columns:1fr;gap:10px;align-items:stretch}
+  .primaryLink,.secondaryLink,.correctionLinks a,.correctionLinks .textBtn{display:block;text-align:center;width:100%}
+
+  .examCard{padding:18px 14px}
+  .flashExam>h3,.examCard>h3{font-size:24px;line-height:1.12}
+  .answers button{min-height:54px;font-size:14px;padding:12px 13px}
+  .feedback,.correction,.flashAnswer,.flashHidden,.questionContext{padding:14px}
+  .questionContext p,.hint{font-size:13px}
+  .deckTop>span,.resultCount,.refreshStamp{font-size:12px}
+  .deckActions{position:sticky;bottom:0;background:linear-gradient(to top,#fff 75%,rgba(255,255,255,.92));padding-top:12px;padding-bottom:calc(2px + env(safe-area-inset-bottom))}
+
+  .reminderCard{padding:18px 14px;border-radius:16px}
+  .reminderControls{display:grid;grid-template-columns:1fr;gap:10px;width:100%}
+  .reminderControls > *{width:100%}
+
+  .testDateLine{padding:12px;border-radius:10px}
+  .dateEditor{border-radius:12px}
+}
+
+@media (max-width: 380px){
+  .sidebar nav button{font-size:7px}
+  .newsCard h3{font-size:18px}
+  .periodChoices{grid-template-columns:1fr}
+}
+
+/* v4.3 — tutoriel de premier démarrage */
+.tutorialBack{position:fixed;inset:0;z-index:100;background:rgba(10,10,10,.64);display:grid;place-items:center;padding:20px;backdrop-filter:blur(4px)}
+.tutorialModal{width:min(620px,100%);background:#fbf9f4;border:1px solid #d8d2c8;border-radius:18px;padding:26px;box-shadow:0 24px 80px rgba(0,0,0,.28)}
+.tutorialModalTop{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.tutorialStepCount{display:block;font-size:11px;color:#7f776e;font-weight:800;letter-spacing:.08em}.tutorialDots{display:flex;gap:5px;margin-top:8px}.tutorialDots i{display:block;width:18px;height:3px;background:#ded8cf;border-radius:99px}.tutorialDots i.active{background:var(--accent)}.tutorialSkip{border:0;background:transparent;color:#6f675f;font:inherit;font-weight:700;cursor:pointer;padding:4px}.tutorialVisual{width:72px;height:72px;border-radius:18px;background:#171717;color:#fff;display:grid;place-items:center;font-size:30px;margin:28px 0 18px}.tutorialModal h2{font-family:'Newsreader',serif;font-size:34px;line-height:1.04;margin:6px 0 10px}.tutorialText{font-size:16px;line-height:1.62;color:#5f5851;max-width:540px}.tutorialActions{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;border-top:1px solid #e6e0d7;margin-top:24px;padding-top:18px}.tutorialActions button{min-height:43px;border:0;border-radius:7px;padding:10px 14px;font-weight:750;cursor:pointer}.tutorialActions .secondary{background:#ece8e1;color:#222}.tutorialActions .submit{margin:0;background:#171717;color:#fff}.tutorialPage{max-width:1100px}.tutorialHero{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;background:#171717;color:#fff;border-radius:16px;padding:30px}.tutorialHero h2{font-family:'Newsreader',serif;font-size:34px;margin:4px 0 8px}.tutorialHero p:not(.eyebrow){color:#bbb;max-width:650px}.tutorialHero .submit{background:#fff;color:#171717;margin:0;white-space:nowrap}.tutorialOverview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}.tutorialOverviewCard{background:#fff;border:1px solid #e2ddd5;border-radius:14px;padding:20px;min-height:190px}.tutorialOverviewCard>span{font-family:'Newsreader',serif;font-size:22px;color:#aaa39a}.tutorialOverviewCard h3{font-family:'Newsreader',serif;font-size:22px;margin:14px 0 8px}.tutorialOverviewCard p{font-size:13px;line-height:1.55;color:#746d65}
+@media(max-width:720px){
+  .sidebar nav{grid-template-columns:repeat(7,minmax(54px,1fr));overflow-x:auto;scrollbar-width:none}.sidebar nav::-webkit-scrollbar{display:none}.sidebar nav button{min-width:54px}
+  .tutorialBack{padding:0;place-items:end center}.tutorialModal{border-radius:20px 20px 0 0;border-left:0;border-right:0;border-bottom:0;padding:22px 16px calc(18px + env(safe-area-inset-bottom));max-height:92vh;overflow:auto}.tutorialVisual{width:62px;height:62px;font-size:27px;margin:22px 0 16px}.tutorialModal h2{font-size:29px}.tutorialText{font-size:15px}.tutorialActions{grid-template-columns:1fr 1fr}.tutorialActions>span{display:none}.tutorialActions button{width:100%}.tutorialActions .submit{grid-column:1/-1;grid-row:1}.tutorialHero{display:block;padding:22px 18px}.tutorialHero h2{font-size:29px}.tutorialHero .submit{width:100%;margin-top:12px}.tutorialOverview{grid-template-columns:1fr}.tutorialOverviewCard{min-height:0}.tutorialOverviewCard h3{font-size:21px}
+}
