@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.3';
+const APP_VERSION='v3.5';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -47,6 +47,20 @@ function displaySummaries(item){
   return {short,long};
 }
 
+const topicStopWords=new Set('de du des le la les un une et ou en au aux à a l d pour par sur dans avec sans chez ce cet cette ces son sa ses leur leurs est sont a ont vers après avant plus moins très nouveau nouvelle nouveaux nouvelles actualité actu article video vidéo direct live'.split(/\s+/));
+function topicTokens(item){
+  const raw=`${item?.title||''} ${item?.summaryShort||''} ${item?.description||''}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  return new Set(raw.replace(/[^a-z0-9'-]+/g,' ').split(/\s+/).filter(x=>x.length>3&&!topicStopWords.has(x)));
+}
+function relatedScore(a,b){
+  if(!a||!b||a.id===b.id) return 0;
+  const A=topicTokens(a),B=topicTokens(b); let common=0;
+  A.forEach(x=>{if(B.has(x)) common++});
+  const entityBoost=[...A].some(x=>B.has(x)&&x.length>=7)?1.5:0;
+  const catBoost=a.category===b.category?.toString()?0.5:0;
+  return common+entityBoost+catBoost;
+}
+
 const nav = [
   ['Accueil','⌂'],['Actualités','◉'],['Ajouter','＋'],['Révisions','✓'],['Tests fictifs','✎'],['Mes tests','▣']
 ];
@@ -70,6 +84,8 @@ function App(){
   const [error,setError]=useState('');
   const [query,setQuery]=useState('');
   const [category,setCategory]=useState('Toutes');
+  const [dateFilter,setDateFilter]=useState(()=>localStorage.getItem('veille-date-filter')||'all');
+  const [customSince,setCustomSince]=useState(()=>localStorage.getItem('veille-custom-since')||'');
   const [selected,setSelected]=useState(null);
   const [quiz,setQuiz]=useState(null);
   const [quizAnswer,setQuizAnswer]=useState('');
@@ -97,6 +113,8 @@ function App(){
   useEffect(()=>localStorage.setItem('veille-media-access',JSON.stringify(mediaAccess)),[mediaAccess]);
   useEffect(()=>localStorage.setItem('veille-reminder-time',reminderTime),[reminderTime]);
   useEffect(()=>localStorage.setItem('veille-reminder-enabled',reminderEnabled?'1':'0'),[reminderEnabled]);
+  useEffect(()=>localStorage.setItem('veille-date-filter',dateFilter),[dateFilter]);
+  useEffect(()=>localStorage.setItem('veille-custom-since',customSince),[customSince]);
 
   useEffect(()=>{
     if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
@@ -163,10 +181,26 @@ function App(){
   },[tests,today]);
   const relevantNews=useMemo(()=>combinedNews.filter(n=>n.date.slice(0,10)>=activeSince),[combinedNews,activeSince]);
   const categories=['Toutes',...Array.from(new Set(combinedNews.map(n=>n.category))).sort()];
+  const filterSince=useMemo(()=>{
+    if(dateFilter==='gras') return tests.qcm?nextDay(tests.qcm):'';
+    if(dateFilter==='leconte') return tests.photo?nextDay(tests.photo):'';
+    if(dateFilter==='custom') return customSince||'';
+    return '';
+  },[dateFilter,customSince,tests]);
   const filtered=useMemo(()=>combinedNews.filter(n=>{
     const q=query.toLowerCase().trim();
-    return (category==='Toutes'||n.category===category) && (!q||`${n.title} ${n.description} ${n.source}`.toLowerCase().includes(q));
-  }),[combinedNews,query,category]);
+    const dateOk=!filterSince || (n.date||'').slice(0,10)>=filterSince;
+    return dateOk && (category==='Toutes'||n.category===category) && (!q||`${n.title} ${n.description} ${n.source}`.toLowerCase().includes(q));
+  }),[combinedNews,query,category,filterSince]);
+  const relatedToSelected=useMemo(()=>{
+    if(!selected) return [];
+    return combinedNews
+      .filter(n=>n.id!==selected.id && new Date(n.date||0)>=new Date(selected.date||0))
+      .map(n=>({n,score:relatedScore(selected,n)}))
+      .filter(x=>x.score>=2)
+      .sort((a,b)=>b.score-a.score || new Date(b.n.date)-new Date(a.n.date))
+      .slice(0,6).map(x=>x.n);
+  },[selected,combinedNews]);
 
   const toggleSaved=id=>setSaved(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
@@ -186,74 +220,106 @@ function App(){
   useEffect(()=>localStorage.setItem('ihecs-recent-test-ids',JSON.stringify(recentTestIds.slice(-30))),[recentTestIds]);
 
   const questionLead=(item,answer='')=>{
-    const masked=maskAnswer(item?.title||'',answer);
-    if(masked && masked!==cleanTitle(item?.title||'')) return masked;
-    const short=item?.summaryShort||headlineSummary(item?.title||'',item?.category||'');
-    return short&&short.length<240?short:cleanTitle(item?.title||'');
+    const title=cleanTitle(item?.title||'');
+    if(!title) return '';
+    const masked=maskAnswer(title,answer);
+    // N'affiche un contexte masqué que s'il reste naturel. Sinon le titre brut est préférable.
+    if(masked && masked!==title && !/\[à trouver\].*\[à trouver\]/i.test(masked) && masked.length>=18) return masked;
+    return title;
+  };
+
+  const badQuizTitle=(title='')=>{
+    const t=cleanTitle(title).toLowerCase();
+    if(!t || t.length<18) return true;
+    return /^(la |le |les )?(photo|vidéo|video) (extraordinaire|incroyable)|\bvoici\b|\bregardez\b|\ben images?\b|\bminute par minute\b|\bdirect\b|\blive\b/.test(t);
+  };
+  const cleanAnswerText=(value='')=>String(value||'')
+    .replace(/\s+(?:RTBF|RTL info|La Libre|Le Soir|BX1|La DH|DHnet|Le Vif|L'Avenir|Sudinfo)\s*$/i,'')
+    .replace(/\s*\(VID[ÉE]O\)\s*$/i,'')
+    .replace(/\s+/g,' ').trim().replace(/[.!?]+$/,'');
+  const validShortAnswer=(value='')=>{
+    const a=cleanAnswerText(value);
+    return a.length>=2 && a.length<=85 && !/^\[|à trouver|information à revoir/i.test(a);
   };
 
   const makeFact=(item)=>{
-    // Une question de test d'actu doit porter sur le fait essentiel : acteur, fonction, décision, lieu, prix ou événement.
-    // Les micro-chiffres (nombre de vols, victimes, euros, etc.) ne deviennent jamais automatiquement une question.
-    if(item.quizPrompt && item.quizAnswer) return {question:item.quizPrompt,answer:item.quizAnswer,type:'text',answerKind:'event',quality:6};
+    // v3.4 : si l'article ne permet pas une question nette avec une réponse vérifiable,
+    // il n'entre pas dans le test de Mr Gras. Pas de question vague pour remplir artificiellement 12 cartes.
+    if(!item?.title || badQuizTitle(item.title)) return null;
+    if(item.quizPrompt && item.quizAnswer && validShortAnswer(item.quizAnswer)){
+      return {question:item.quizPrompt,answer:cleanAnswerText(item.quizAnswer),type:'text',answerKind:'event',quality:8};
+    }
     const t=cleanTitle(item.title||'');
-    const d=(item.description||'').replace(/\s+/g,' ').trim();
+    const d=(item.summaryShort||item.description||'').replace(/\s+/g,' ').trim();
     let m;
 
-    // Grèves / mouvements sociaux : on teste l'acteur concerné, pas le nombre de perturbations.
+    // Citation + personnalité clairement nommée : on teste la personne, pas la citation.
+    if((m=t.match(/(?:premiers?|premières?)\s+mots?\s+de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:aux|à l['’]|au)\s+([^()–—:]{3,60})/i))){
+      const person=cleanAnswerText(m[1]), group=cleanAnswerText(m[2]);
+      return {question:`Quelle personnalité a livré ses premiers mots ${/^(diables|red|équipe)/i.test(group)?'aux':'à'} ${group} dans cette actualité ?`,answer:person,type:'entity',answerKind:'person',quality:9};
+    }
+
+    // Grèves / mouvements sociaux : acteur ou lieu structurant, jamais micro-chiffres.
     if((m=t.match(/(?:gr[eè]ve|mouvement social|arr[eê]t de travail).*?\bchez\s+([^:;,–—-]{2,55})/i))){
-      const actor=m[1].trim();
-      return {question:`Quelle entreprise ou organisation est directement concernée par cette grève ?`,answer:actor,type:'entity',answerKind:'organisation',quality:7};
+      const actor=cleanAnswerText(m[1]);
+      if(validShortAnswer(actor)) return {question:`Quelle entreprise ou organisation est directement concernée par la grève évoquée dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:9};
     }
     if((m=t.match(/\ba[ée]roport de\s+([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ -]{2,35})/))){
-      const place=m[1].trim().replace(/\s+(?:pr[eé]voit|annonce|sera|est|a)\b.*$/i,'').trim();
-      return {question:`Quel aéroport belge est au cœur de cette actualité ?`,answer:place,type:'entity',answerKind:'place',quality:6};
+      const place=cleanAnswerText(m[1].replace(/\s+(?:pr[eé]voit|annonce|sera|est|a)\b.*$/i,''));
+      if(validShortAnswer(place)) return {question:`Quel aéroport belge est directement concerné par cette actualité ?`,answer:place,type:'entity',answerKind:'place',quality:8};
     }
 
-    // Prix / récompenses / compétitions.
+    // Prix / récompenses / victoires : format très proche d'un vrai QCM d'actu.
     if((m=t.match(/^(.+?)\s+(?:remporte|gagne|reçoit|décroche|obtient)\s+(.+)$/i))){
-      const subject=m[1].trim(), prize=m[2].trim().replace(/[.!?]+$/,'');
-      return {question:`Quelle récompense, distinction ou victoire est associée à « ${subject} » ?`,answer:prize,type:'text',answerKind:'award',quality:7};
-    }
-    if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient|est élu|est élue|est désigné|est désignée)\s+(.+)$/i))){
-      const person=m[1].trim(), role=m[2].trim().replace(/[.!?]+$/,'');
-      return {question:`Quelle nouvelle fonction ou responsabilité concerne ${person} ?`,answer:role,type:'text',answerKind:'role',quality:7};
+      const subject=cleanAnswerText(m[1]), prize=cleanAnswerText(m[2]);
+      if(validShortAnswer(prize)) return {question:`Quelle récompense, distinction ou victoire est associée à « ${subject} » ?`,answer:prize,type:'text',answerKind:'award',quality:9};
     }
 
-    // Deux pays / deux acteurs liés par une décision diplomatique ou institutionnelle.
+    // Nominations / nouvelles fonctions.
+    if((m=t.match(/^(.+?)\s+(?:est nommé|est nommée|devient|est élu|est élue|est désigné|est désignée)\s+(.+)$/i))){
+      const person=cleanAnswerText(m[1]), role=cleanAnswerText(m[2]);
+      if(validShortAnswer(person)&&validShortAnswer(role)) return {question:`Quelle nouvelle fonction ou responsabilité est attribuée à ${person} ?`,answer:role,type:'text',answerKind:'role',quality:9};
+    }
+
+    // Relations diplomatiques ou accords entre deux acteurs clairement identifiés.
     if((m=t.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][^,:;]{1,35}?)\s+et\s+([A-ZÀ-ÖØ-Ý][^,:;]{1,35}?)\s+(rétablissent|signent|annoncent|concluent|adoptent|lancent|décident|ouvrent|ferment)\b/i))){
-      const a=m[1].trim(), b=m[2].trim(), action=m[3].toLowerCase();
-      return {question:`Quels sont les deux acteurs au centre de cette actualité où ils ${action} une mesure ou un accord ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:7};
+      const a=cleanAnswerText(m[1]), b=cleanAnswerText(m[2]), action=m[3].toLowerCase();
+      if(validShortAnswer(a)&&validShortAnswer(b)) return {question:`Quels sont les deux acteurs directement concernés par l'actualité où ils ${action} une mesure ou un accord ?`,answer:`${a} et ${b}`,type:'entity-pair',answerKind:'pair',quality:9};
+    }
+
+    // Après un contexte avant « : », on analyse le fait principal séparément.
+    const core=(t.includes(':')?t.split(':').slice(1).join(':').trim():t).replace(/^['"“”]+|['"“”]+$/g,'').trim();
+
+    // « L'Iran a communiqué / annoncé / décidé... » -> qui ?
+    if((m=core.match(/^(?:La |Le |L’|L'|Les )?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’ .-]{2,45}?)\s+(?:a |ont )?(communiqué|annoncé|annoncent|décidé|décident|adopté|adoptent|confirmé|confirment|signé|signent|rouvert|rouvrent|fermé|ferment)\b/i))){
+      const actor=cleanAnswerText(m[1]);
+      if(validShortAnswer(actor)) return {question:`Quel acteur est à l'origine de l'annonce ou de la décision décrite dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
     }
 
     // Lancement / présentation : qui est à l'origine ?
-    if((m=t.match(/^(.+?)\s+(?:lance|présente|dévoile|publie)\s+(.+)$/i))){
-      const actor=m[1].trim(), object=m[2].trim();
-      return {question:`Qui est à l’origine de « ${object} » ?`,answer:actor,type:'entity',answerKind:'organisation',quality:7};
+    if((m=core.match(/^(.+?)\s+(?:lance|présente|dévoile|publie)\s+(.+)$/i))){
+      const actor=cleanAnswerText(m[1]), object=cleanAnswerText(m[2]);
+      if(validShortAnswer(actor)&&object.length>=8) return {question:`Qui est à l’origine de « ${object} » ?`,answer:actor,type:'entity',answerKind:'organisation',quality:9};
     }
 
-    // Décision / annonce : acteur identifiable.
-    if((m=t.match(/^(.+?)\s+(?:annonce|confirme|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit)\s+(.+)$/i))){
-      const actor=m[1].trim(), decision=m[2].trim();
-      if(actor.length<=70) return {question:`Quelle organisation a annoncé cette décision ou ce changement ?`,answer:actor,type:'entity',answerKind:'organisation',quality:6};
+    // Décision / annonce avec acteur simple. On rejette les débuts éditoriaux (« du changement... »).
+    if((m=core.match(/^(.+?)\s+(?:annonce|confirme|décide|adopte|approuve|rejette|suspend|supprime|autorise|interdit)\s+(.+)$/i))){
+      const actor=cleanAnswerText(m[1]), decision=cleanAnswerText(m[2]);
+      if(validShortAnswer(actor) && actor.length<=55 && !/^(du|de la|un|une)\s+(changement|nouveau|nouvelle|rebondissement)/i.test(actor) && decision.length>=10){
+        return {question:`Quel acteur a annoncé ou pris la décision décrite dans cette actualité ?`,answer:actor,type:'entity',answerKind:'organisation',quality:8};
+      }
     }
 
-    // « X : ... » → sujet clairement identifié. On demande le fait associé, jamais « quelle actu ? » sans repère.
-    const parts=t.split(/\s*[:—–]\s*/).filter(Boolean);
-    if(parts.length>=2 && parts[0].length>=3 && parts[0].length<=65){
-      const subject=parts[0].trim();
-      const event=parts.slice(1).join(' — ').trim();
-      if(event.length>=12) return {question:`Quel événement important concerne « ${subject} » ?`,answer:event,type:'text',answerKind:'event',quality:4};
+    // Arrivée / départ d'une personne : on teste la personne ou l'organisation si le titre est explicite.
+    if((m=core.match(/(?:arrivée|arrive|rejoint)\s+(?:de\s+)?([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:chez|à|au)\s+([^,;:–—]{2,50})/i))){
+      const person=cleanAnswerText(m[1]), org=cleanAnswerText(m[2]);
+      if(validShortAnswer(person)&&validShortAnswer(org)) return {question:`Quelle personnalité rejoint ${org} dans cette actualité ?`,answer:person,type:'entity',answerKind:'person',quality:8};
     }
 
-    // Si le titre ne permet pas une vraie question autonome, on crée une flashcard guidée avec un sujet explicite.
-    const subject=(t.match(/^([^,.;:—–]{4,70})/)||[])[1]?.trim();
-    if(subject && d){
-      return {question:`Que faut-il retenir au sujet de « ${subject} » ?`,answer:d.slice(0,280),type:'open',answerKind:'event',quality:3};
-    }
-    return {question:`Quel fait essentiel faut-il retenir de « ${t} » ?`,answer:d||t||'Information à revoir',type:'open',answerKind:'event',quality:2};
+    // Pas de fallback « Que faut-il retenir ? ». Si on ne sait pas poser une question précise, on saute l'article.
+    return null;
   };
-  const withLead=(item,fact)=>({...fact,lead:questionLead(item,fact.answer)});
+  const withLead=(item,fact)=> fact ? ({...fact,lead:questionLead(item,fact.answer)}) : null;
 
   const shuffle=(arr)=>{
     const out=[...arr];
@@ -326,12 +392,12 @@ function App(){
     let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url));
     if(pool.length<Math.min(count*2,base.length)) pool=base;
     const items=pickDiverseItems(pool,Math.min(Math.max(count*4,36),pool.length));
-    const facts=items.map(item=>({item,...withLead(item,makeFact(item))}));
+    const facts=items.map(item=>{const fact=withLead(item,makeFact(item));return fact?{item,...fact}:null}).filter(Boolean);
     let cards;
     if(mode==='leconte'){
       cards=shuffle(facts.filter(x=>x.item.image)).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
     }else{
-      const reliable=shuffle(facts.filter(x=>x.quality>=3));
+      const reliable=shuffle(facts.filter(x=>x.quality>=8));
       cards=[];
       for(const fact of reliable){
         const options=fact.quality>=6?buildOptions(fact,reliable):[];
@@ -375,7 +441,7 @@ function App(){
         if(found.length>=6) break;
       }
     }
-    const cards=found.slice(0,6).map(item=>{const fact=withLead(item,makeFact(item));return {item,...fact,kind:'photo'};});
+    const cards=found.slice(0,6).map(item=>({item,kind:'photo'}));
     setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-30));
     setDeck(shuffle(cards)); setDeckIndex(0); setPhotoDeckLoading(false);
     setPhotoDeckMessage(cards.length?`${cards.length} photo${cards.length>1?'s':''} prête${cards.length>1?'s':''}.`:'Aucune vraie photo exploitable n’a été trouvée dans les articles chargés.');
@@ -393,7 +459,7 @@ function App(){
       const data=await r.json();
       if(!r.ok) throw new Error(data.error||'Analyse impossible');
       const fp=makeFact(data);
-      setDraft({...data,quizPrompt:fp.question,quizAnswer:fp.answer});
+      setDraft({...data,quizPrompt:fp?.question||'',quizAnswer:fp?.answer||''});
       if(data.warning) setAddMessage(data.warning);
     }catch(e){setAddMessage(e.message||'Analyse impossible');}
     finally{setAnalyzing(false);}
@@ -456,8 +522,19 @@ function App(){
 
       {tab==='Actualités'&&<section className="noTop">
         <div className="toolbar"><div className="search"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Rechercher un sujet, une personne, un média…"/></div><select value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c}>{c}</option>)}</select></div>
+        <div className="periodFilter">
+          <div className="periodFilterText"><span>Afficher l’actualité</span><strong>{filterSince?`depuis le ${fmt(filterSince,true)}`:'sans limite de date'}</strong></div>
+          <div className="periodChoices">
+            <button className={dateFilter==='all'?'active':''} onClick={()=>setDateFilter('all')}>Toutes</button>
+            <button className={dateFilter==='gras'?'active':''} onClick={()=>setDateFilter('gras')}>Depuis le test de Mr Gras</button>
+            <button className={dateFilter==='leconte'?'active':''} onClick={()=>setDateFilter('leconte')}>Depuis le test de Mr Leconte</button>
+            <button className={dateFilter==='custom'?'active':''} onClick={()=>setDateFilter('custom')}>Depuis une date</button>
+            {dateFilter==='custom'&&<input type="date" value={customSince} max={today} onChange={e=>setCustomSince(e.target.value)}/>} 
+          </div>
+        </div>
         <div className="sourceStrip"><strong>Sources suivies</strong>{sourceStatus.map(s=><span key={s.name} className={s.ok?'sourceOk':'sourceOff'}>{s.name}</span>)}</div>
-        {loading?<Skeleton/>:error?<Empty text={error}/>:<div className="newsGrid">{filtered.map(n=><NewsCard key={n.id} n={n} onOpen={()=>setSelected(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
+        <div className="resultCount">{filtered.length} actualité{filtered.length>1?'s':''}{filterSince?' dans cette période':''}</div>
+        {loading?<Skeleton/>:error?<Empty text={error}/>:filtered.length===0?<Empty text="Aucune actualité trouvée pour cette période."/>:<div className="newsGrid">{filtered.map(n=><NewsCard key={n.id} n={n} onOpen={()=>setSelected(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
       </section>}
 
       {tab==='Ajouter'&&<section className="noTop">
@@ -471,11 +548,11 @@ function App(){
 
       {tab==='Révisions'&&<section className="noTop">
         <div className="revisionIntro"><div><p className="eyebrow">Révision intelligente</p><h2>Choisis ton mode</h2><p>Les exercices portent sur le contenu de l’actualité, jamais sur le nom du média qui a publié l’article.</p></div></div>
-        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(12,'gras')}}><span>12 QUESTIONS</span><strong>Session Mr Gras</strong><small>QCM sur les faits essentiels + flashcards</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
+        <div className="modeGrid"><button className="mode" onClick={()=>{setTab('Tests fictifs');buildDeck(12,'gras')}}><span>JUSQU’À 12 QUESTIONS</span><strong>Session Mr Gras</strong><small>QCM sur les faits essentiels + flashcards</small></button><button className="mode" onClick={()=>{setTab('Tests fictifs');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setTab('Actualités');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setTab('Actualités');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions factuelles et compréhensibles sur les acteurs, décisions, fonctions, lieux, récompenses et enjeux. Les articles sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : uniquement des questions précises avec une réponse identifiable. Les articles qui ne permettent pas de fabriquer une bonne question sont écartés. Les sujets sont mélangés à chaque session et les sujets récemment vus sont évités. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>Jusqu’à 12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
         {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
@@ -490,28 +567,29 @@ function App(){
             {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:c.kind==='mcq'?<>
             <span className="cardCategory">{c.item.category}</span>
-            {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
             <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
             {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
-            {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
+            {c.lead&&<div className="questionContext"><span>Contexte de la question</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
             {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}<div className="correctionLinks"><button className="textBtn left" onClick={()=>setSelected(c.item)}>Voir la fiche d’actu →</button><a href={c.item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>}
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
-        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(12,'gras')}>Recommencer avec 12 questions</button></article>}
+        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(12,'gras')}>Relancer une session</button></article>}
       </section>}
 
       {tab==='Mes tests'&&<section className="noTop">
-        <div className="testGrid">{profs.map(p=><article className="settingsCard" key={p.key}><span className="softPill">{p.label}</span><h2>{p.name}</h2><label>Date du dernier test</label><input type="date" value={tests[p.key]} max={today} onChange={e=>setTests(t=>({...t,[p.key]:e.target.value}))}/><div className="period compact"><span>Prochaine matière</span><strong>{fmt(nextDay(tests[p.key]))} → aujourd’hui</strong></div><button onClick={()=>markTest(p.key)}>Enregistrer un test aujourd’hui</button></article>)}</div>
+        <div className="testGrid">{profs.map(p=><article className="settingsCard" key={p.key}><span className="softPill">{p.label}</span><h2>{p.name}</h2><label>Date du dernier test d’actu</label><input type="date" value={tests[p.key]} max={today} onChange={e=>setTests(t=>({...t,[p.key]:e.target.value}))}/><div className="period compact"><span>Actualités à connaître depuis</span><strong>{fmt(nextDay(tests[p.key]))} → aujourd’hui</strong></div><button onClick={()=>markTest(p.key)}>Enregistrer un test aujourd’hui</button></article>)}</div>
         <div className="sectionTitle historyTitle"><div><p className="eyebrow">Archives</p><h2>Historique des tests</h2></div></div>{history.length===0?<Empty text="Aucun test archivé pour l’instant."/>:<div className="historyList">{history.map(h=><div key={h.id} className="historyItem"><div><strong>{h.prof==='qcm'?'Mr Gras — QCM':'Mr Leconte — Photo'}</strong><span>Test du {fmt(h.date)}</span></div><p>Matière archivée : {fmt(h.from)} → {fmt(h.to)}</p></div>)}</div>}
       </section>}
     </main>
 
-    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmt(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p><div className="modalActions"><a className="primaryLink" href={selected.url} target="_blank" rel="noreferrer">Lire l’article source ↗</a><button className="secondary" onClick={()=>toggleSaved(selected.id)}>{saved.includes(selected.id)?'★ Sauvegardé':'☆ Sauvegarder'}</button></div></article></div>})()}
+    {selected&&(()=>{const sum=displaySummaries(selected);return <div className="modalBack" onClick={()=>setSelected(null)}><article className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setSelected(null)}>×</button><div className="modalMeta"><span>{selected.category}</span><span>{selected.source}</span><span>{fmt(selected.date)}</span>{selected.manual&&<span>Ajout manuel</span>}{selected.shared&&<span>Partagé</span>}</div><h2>{selected.title}</h2><SmartImage item={selected} className="modalImage" alt="Illustration de l’actualité"/><div className="summaryStack"><div className="factBox summaryShort"><span>Résumé express</span><p>{sum.short||"Résumé indisponible pour le moment."}</p></div><div className="factBox summaryLong"><span>Résumé clair</span><p>{sum.long||sum.short}</p></div></div>{selected.context&&<><h3>Contexte</h3><p className="muted">{selected.context}</p></>}<h3>Source originale</h3><p className="muted">Les résumés servent à réviser. Pour vérifier un détail, une citation ou un chiffre, ouvre toujours l’article du média.</p>
+        {relatedToSelected.length>0&&<div className="topicFollow"><div className="topicFollowHead"><span>Suivi du sujet</span><h3>Lire les articles liés et plus récents</h3><p>Cette actualité peut évoluer. Voici d’autres articles portant sur le même sujet, y compris chez d’autres médias.</p></div><div className="relatedList">{relatedToSelected.map(r=><article key={r.id} className="relatedItem"><div><span>{r.source} · {fmt(r.date,true)}</span><strong>{r.title}</strong></div><div className="relatedActions"><button className="textBtn left" onClick={()=>setSelected(r)}>Voir la fiche</button><a href={r.url} target="_blank" rel="noreferrer">Lire l’article lié ↗</a></div></article>)}</div></div>}
+        <div className="modalActions"><a className="primaryLink" href={selected.url} target="_blank" rel="noreferrer">Lire l’article source ↗</a><button className="secondary" onClick={()=>toggleSaved(selected.id)}>{saved.includes(selected.id)?'★ Sauvegardé':'☆ Sauvegarder'}</button></div></article></div>})()}
   </div>
 }
 
