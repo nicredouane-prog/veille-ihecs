@@ -17,10 +17,30 @@ function firstUsefulImg(html, base){
   }
   return '';
 }
+
+function jsonLdImage(html,base){
+  const blocks=[...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for(const b of blocks){
+    try{
+      const data=JSON.parse(b[1]); const rows=Array.isArray(data)?data:[data];
+      for(const row of rows){
+        let img=row?.image||row?.thumbnailUrl;
+        if(Array.isArray(img)) img=img[0];
+        if(img&&typeof img==='object') img=img.url||img.contentUrl;
+        if(typeof img==='string'){const u=absolute(img,base);if(u&&!/logo|icon|avatar|sprite|pixel|tracking|favicon|brand|google|gnews|default|placeholder|author|profil/i.test(u)) return u;}
+      }
+    }catch{}
+  }
+  return '';
+}
+function linkImage(html,base){
+  const m=html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i)||html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']image_src["']/i);
+  return m?absolute(decode(m[1]),base):'';
+}
 async function fetchHtml(url){
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),8000);
   try{
-    const r=await fetch(url,{signal:controller.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 VeilleIHECS/2.5'}});
+    const r=await fetch(url,{signal:controller.signal,redirect:'follow',headers:{'user-agent':'Mozilla/5.0 IHECS-Test-Actus/3.2'}});
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const type=r.headers.get('content-type')||'';
     if(!type.includes('text/html')) throw new Error('not-html');
@@ -33,7 +53,7 @@ export default async function handler(req,res){
   let u; try{u=new URL(raw); if(!['http:','https:'].includes(u.protocol)) throw new Error()}catch{return res.status(400).json({image:''})}
   try{
     const {html,finalUrl}=await fetchHtml(u.toString());
-    let candidate=meta(html,'og:image:secure_url')||meta(html,'og:image')||meta(html,'twitter:image')||meta(html,'twitter:image:src')||firstUsefulImg(html,finalUrl);
+    let candidate=meta(html,'og:image:secure_url')||meta(html,'og:image')||meta(html,'twitter:image')||meta(html,'twitter:image:src')||jsonLdImage(html,finalUrl)||linkImage(html,finalUrl)||firstUsefulImg(html,finalUrl);
     candidate=absolute(candidate,finalUrl);
     if(/logo|icon|avatar|sprite|pixel|tracking|favicon|brand|google|gnews|default|placeholder|author|profil/i.test(candidate)) candidate='';
     return res.status(200).json({image:candidate});

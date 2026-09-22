@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v3.1';
+const APP_VERSION='v3.2';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const isoToday = () => new Date().toISOString().slice(0,10);
 const nextDay = d => { const x = new Date(`${d}T12:00:00`); x.setDate(x.getDate()+1); return x.toISOString().slice(0,10); };
@@ -79,6 +79,8 @@ function App(){
   const [flashRevealed,setFlashRevealed]=useState(false);
   const [deckStats,setDeckStats]=useState({ok:0,review:0});
   const [photoAnswer,setPhotoAnswer]=useState('');
+  const [photoDeckLoading,setPhotoDeckLoading]=useState(false);
+  const [photoDeckMessage,setPhotoDeckMessage]=useState('');
   const [saved,setSaved]=useState(()=>safeJson('veille-saved',[]));
   const [reminderTime,setReminderTime]=useState(()=>localStorage.getItem('veille-reminder-time')||'19:00');
   const [reminderEnabled,setReminderEnabled]=useState(()=>localStorage.getItem('veille-reminder-enabled')==='1');
@@ -171,6 +173,22 @@ function App(){
     .replace(/\s+[–—-]\s+(RTBF|RTL info|La Libre|Le Soir|BX1|La DH|DHnet|Le Vif|L'Avenir|Sudinfo).*$/i,'')
     .replace(/\s+/g,' ').trim();
 
+  const maskAnswer=(text='',answer='')=>{
+    let out=cleanTitle(text||'');
+    const bits=String(answer||'').split(/\s+et\s+|\s*\/\s*/i).map(x=>x.trim()).filter(x=>x.length>1);
+    const escape=x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    for(const bit of bits){
+      try{ out=out.replace(new RegExp(escape(bit),'gi'),'[à trouver]'); }catch{}
+    }
+    return out;
+  };
+  const questionLead=(item,answer='')=>{
+    const masked=maskAnswer(item?.title||'',answer);
+    if(masked && masked!==cleanTitle(item?.title||'')) return masked;
+    const short=item?.summaryShort||headlineSummary(item?.title||'',item?.category||'');
+    return short&&short.length<240?short:cleanTitle(item?.title||'');
+  };
+
   const makeFact=(item)=>{
     // Une question de test d'actu doit porter sur le fait essentiel : acteur, fonction, décision, lieu, prix ou événement.
     // Les micro-chiffres (nombre de vols, victimes, euros, etc.) ne deviennent jamais automatiquement une question.
@@ -232,6 +250,7 @@ function App(){
     }
     return {question:`Quel fait essentiel faut-il retenir de « ${t} » ?`,answer:d||t||'Information à revoir',type:'open',answerKind:'event',quality:2};
   };
+  const withLead=(item,fact)=>({...fact,lead:questionLead(item,fact.answer)});
 
   const shuffle=(arr)=>[...arr].sort(()=>Math.random()-.5);
   const buildOptions=(fact,facts)=>{
@@ -249,13 +268,14 @@ function App(){
   };
 
   const buildDeck=(count=12,mode='gras')=>{
+    setPhotoDeckMessage('');
     const pool=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
     if(!pool.length) return;
     const shuffled=shuffle(pool).slice(0,Math.min(Math.max(count*6,60),pool.length));
-    const facts=shuffled.map(item=>({item,...makeFact(item)})).sort((a,b)=>b.quality-a.quality);
+    const facts=shuffled.map(item=>({item,...withLead(item,makeFact(item))})).sort((a,b)=>b.quality-a.quality);
     let cards;
     if(mode==='leconte'){
-      cards=facts.filter(x=>x.item.image||x.item.url).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
+      cards=facts.filter(x=>x.item.image).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
     }else{
       const reliable=facts.filter(x=>x.quality>=3);
       cards=reliable.map(fact=>{
@@ -266,7 +286,38 @@ function App(){
     setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizAnswer(''); setQuizResult(null); setPhotoAnswer('');
   };
   const makeQuiz=()=>buildDeck(12,'gras');
-  const makePhotoTest=()=>buildDeck(6,'leconte');
+  const resolvePhoto=async(item)=>{
+    if(item?.image) return {...item,image:item.image};
+    if(!item?.url) return null;
+    try{
+      const r=await fetch(`/api/article-image?url=${encodeURIComponent(item.url)}`);
+      if(!r.ok) return null;
+      const data=await r.json();
+      return data?.image?{...item,image:data.image}:null;
+    }catch{return null;}
+  };
+  const makePhotoTest=async()=>{
+    const pool=shuffle((relevantNews.length?relevantNews:combinedNews).filter(n=>n.title));
+    setPhotoDeckLoading(true); setPhotoDeckMessage('Recherche de photos d’actualité exploitables…');
+    setDeck([]); setDeckIndex(0); setPhotoAnswer(''); setQuizResult(null); setFlashRevealed(false); setDeckStats({ok:0,review:0});
+    const found=[];
+    // Priorité aux images déjà fournies par les médias, puis enrichissement des autres fiches.
+    for(const item of pool.filter(n=>n.image)){
+      found.push({...item,image:item.image});
+      if(found.length>=6) break;
+    }
+    const remaining=pool.filter(n=>!n.image && n.url).slice(0,36);
+    for(let i=0;i<remaining.length && found.length<6;i+=6){
+      const batch=await Promise.all(remaining.slice(i,i+6).map(resolvePhoto));
+      for(const item of batch.filter(Boolean)){
+        if(!found.some(x=>x.url===item.url)) found.push(item);
+        if(found.length>=6) break;
+      }
+    }
+    const cards=found.slice(0,6).map(item=>{const fact=withLead(item,makeFact(item));return {item,...fact,kind:'photo'};});
+    setDeck(cards); setDeckIndex(0); setPhotoDeckLoading(false);
+    setPhotoDeckMessage(cards.length?`${cards.length} photo${cards.length>1?'s':''} prête${cards.length>1?'s':''}.`:'Aucune vraie photo exploitable n’a été trouvée dans les articles chargés.');
+  };
   const nextCard=(result)=>{
     if(result) setDeckStats(s=>({...s,[result]:s[result]+1}));
     setPhotoAnswer(''); setQuizAnswer(''); setQuizResult(null); setFlashRevealed(false);
@@ -362,24 +413,28 @@ function App(){
       </section>}
 
       {tab==='Tests fictifs'&&<section className="noTop">
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions claires sur les acteurs, décisions, fonctions, lieux, récompenses et enjeux — pas sur des micro-chiffres. Mr Leconte : photos d’actualité à expliquer.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest}>6 photos · Mr Leconte</button></div></div>
-        {deck.length===0&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions claires sur les acteurs, décisions, fonctions, lieux, récompenses et enjeux. Chaque question rappelle l’actualité concernée sans révéler la réponse. Mr Leconte : uniquement de vraies photos trouvées dans les articles.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
+        {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
+        {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
         {deck.length>0&&deckIndex<deck.length&&(()=>{const c=deck[deckIndex];return <article className="examCard flashExam">
           <div className="deckTop"><div className="questionNo">{c.kind==='photo'?'MR LECONTE · PHOTO':c.kind==='mcq'?'MR GRAS · QCM · UNE SEULE RÉPONSE':'MR GRAS · FLASHCARD'}</div><span>{deckIndex+1} / {deck.length}</span></div>
           <div className="progress"><i style={{width:`${((deckIndex+1)/deck.length)*100}%`}}/></div>
           {c.kind==='photo'?<>
-            <SmartImage item={c.item} className="testPhoto" alt="Photo liée à l’actualité" fallback={<div className="photoUnavailable"><strong>Aucune photo exploitable pour cette actu.</strong><span>Passe à une autre photo.</span><button type="button" onClick={()=>nextCard('review')}>Question suivante</button></div>}/>
+            <img className="testPhoto" src={`/api/image-proxy?url=${encodeURIComponent(c.item.image)}`} alt="Photo liée à l’actualité"/>
             <h3>Quelle actualité cette photo représente-t-elle ?</h3>
             <p className="hint">Explique le fait, les personnes ou institutions concernées et le contexte en quelques lignes.</p>
             <textarea value={photoAnswer} onChange={e=>setPhotoAnswer(e.target.value)} placeholder="Ta réponse…"/>
             {!quizResult?<button className="submit" disabled={photoAnswer.trim().length<15} onClick={()=>setQuizResult(true)}>Voir la correction</button>:<div className="correction"><span>Réponse attendue</span><h3>{c.item.title}</h3><p>{c.item.description||c.answer}</p>{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
           </>:c.kind==='mcq'?<>
             <span className="cardCategory">{c.item.category}</span>
+            {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
             <div className="answers">{c.options.map(opt=><button key={opt} className={quizAnswer===opt?'chosen':''} disabled={quizResult!==null} onClick={()=>setQuizAnswer(opt)}>{opt}</button>)}</div>
             {quizResult===null?<button className="submit" disabled={!quizAnswer} onClick={()=>setQuizResult(quizAnswer===c.answer)}>Valider ma réponse</button>:<div className={`feedback ${quizResult?'good':'wrong'}`}><strong>{quizResult?'Bonne réponse.':'Mauvaise réponse.'}</strong><p>Réponse : <b>{c.answer}</b></p>{c.item.description&&<p>{c.item.description}</p>}</div>}
           </>:<>
             <span className="cardCategory">{c.item.category}</span>
+            {c.lead&&<div className="questionContext"><span>Actu concernée</span><p>{c.lead}</p></div>}
             <h3>{c.question}</h3>
             {!flashRevealed?<div className="flashHidden"><p>Donne une réponse précise avant de retourner la carte.</p><button className="submit" onClick={()=>setFlashRevealed(true)}>Voir la réponse</button></div>:<div className="flashAnswer"><span>Réponse attendue</span><h3>{c.answer}</h3>{c.item.description&&c.answer!==c.item.description&&<p>{c.item.description}</p>}{c.item.context&&<p className="muted">Contexte : {c.item.context}</p>}</div>}
           </>}
