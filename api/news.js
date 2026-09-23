@@ -48,7 +48,7 @@ function contextSentence(category='',title=''){
   if(/gr[eè]ve|a[eé]roport|skeyes|transport|train|sncb/.test(t)) return "Il faut surtout retenir l’origine de la perturbation, les acteurs concernés et son impact concret.";
   if(/prix|festival|film|cin[eé]ma|r[eé]compense|remporte|gagne/.test(t)||category==='Culture') return "Il faut retenir l’œuvre ou la personne concernée, la distinction ou l’événement culturel et pourquoi il fait l’actualité.";
   if(category==='Économie') return "Le point important est l’acteur économique concerné, l’évolution annoncée et son impact potentiel.";
-  if(category==='Sport') return "Le point important est l’événement, les acteurs principaux et le résultat ou l’enjeu sportif.";
+  if(category==='Sport') return "À retenir : le résultat ou l’annonce principale, les sportifs ou équipes concernés et la compétition ou l’enjeu si c’est utile.";
   if(category==='Sciences') return "Le point important est ce qui a été annoncé ou découvert, par qui, et ce que cela change.";
   return "Le point essentiel est le fait principal, les acteurs concernés et la raison pour laquelle l’événement compte.";
 }

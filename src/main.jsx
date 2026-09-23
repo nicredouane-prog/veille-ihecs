@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v5.5';
+const APP_VERSION='v5.7';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -66,7 +66,21 @@ function contextSentence(category='',title=''){
   if(category==='Sciences') return "À retenir : ce qui a été annoncé ou découvert, par qui, et ce que cela change ou pourrait changer.";
   return "Pour comprendre cette actualité, retiens le fait principal, les acteurs concernés et la raison pour laquelle l’événement est important.";
 }
+
+function sportCompactSummary(item){
+  const title=cleanBriefTitle(item?.title||'').replace(/\s+/g,' ').trim();
+  if(!title) return '';
+  const score=title.match(/\b\d{1,2}\s*[-–]\s*\d{1,2}\b/);
+  const resultVerb=title.match(/\b(remporte|gagne|bat|s'impose|s’impose|élimine|qualifie|battu|défait|termine|finit|sacre|sacré|sacrée|vainqueur|victoire|défaite)\b/i);
+  if(score||resultVerb) return ensurePeriod(title);
+  return ensurePeriod(title.length>150?title.slice(0,147).replace(/\s+\S*$/,'')+'…':title);
+}
 function displaySummaries(item){
+  if(item?.category==='Sport'){
+    const short=sportCompactSummary(item)||item.summaryShort||headlineSummary(item.title,item.category)||item.description||'';
+    const long=[short,"À retenir : le résultat ou l’annonce principale, les équipes ou sportifs concernés et, si c’est pertinent, la compétition ou l’enjeu."].filter(Boolean).join(' ');
+    return {short,long};
+  }
   const short=item.summaryShort||headlineSummary(item.title,item.category)||item.description||'';
   const long=item.summaryLong||[short,contextSentence(item.category,item.title)].filter(Boolean).join(' ');
   return {short,long};
@@ -78,34 +92,26 @@ function isObituary(item){
   return item?.category==='Nécrologie'||/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|décédé|décédée|s['’]est éteint|s['’]est éteinte|disparition de|disparu|disparue|nous a quittés|nous a quitté|meurt à|décède à|obsèques|funérailles|adieu à|hommage à)\b/.test(t);
 }
 function obituaryInfo(item){
+  if(item?.person && (item?.who || item?.cause || item?.deathInfo)){
+    return {
+      person:item.person,
+      who:item.who||'Biographie non disponible.',
+      cause:item.cause||'Cause du décès non précisée dans les informations publiques récupérées.',
+      deathInfo:item.deathInfo||''
+    };
+  }
   const title=(item?.title||'').replace(/\s+/g,' ').trim();
   const desc=(item?.description||'').replace(/\s+/g,' ').trim();
   const text=`${title}. ${desc}`;
   const personPatterns=[
-    /(?:décès|deces|mort|disparition) de ([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})/,
-    /^([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:est mort|est morte|est décédé|est décédée|s['’]est éteint|s['’]est éteinte)/,
-    /^([A-ZÀ-ÖØ-Ý][^,:;–—-]{3,60}),\s+.*(?:mort|décédé|décédée)/i
+    /^(?:Mort|Décès|Deces|Disparition)\s+de\s+([^,:;–—-]{3,60})/i,
+    /^([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})\s+(?:est mort|est morte|est décédé|est décédée|s['’]est éteint|s['’]est éteinte)/i
   ];
   let person=''; for(const re of personPatterns){const m=title.match(re);if(m){person=m[1].trim();break;}}
-  if(!person){
-    const lead=title.split(/[:–—|]/)[0].replace(/[«»"'“”]/g,'').trim();
-    const proper=lead.match(/^([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})/);
-    if(proper) person=proper[1].trim();
-  }
-  person=person.replace(/^(Mort|Décès|Deces|Disparition|Hommage)\s+(de|à)\s+/i,'').trim();
-  const roles=[
-    ['acteur','un acteur'],['actrice','une actrice'],['chanteur','un chanteur'],['chanteuse','une chanteuse'],['journaliste','un·e journaliste'],['écrivain','un écrivain'],['écrivaine','une écrivaine'],['réalisateur','un réalisateur'],['réalisatrice','une réalisatrice'],['musicien','un musicien'],['musicienne','une musicienne'],['footballeur','un footballeur'],['footballeuse','une footballeuse'],['sportif','un sportif'],['sportive','une sportive'],['ministre','une personnalité politique'],['président','une personnalité politique'],['présidente','une personnalité politique'],['scientifique','un·e scientifique'],['artiste','un·e artiste'],['animateur','un animateur'],['animatrice','une animatrice'],['chef','un·e chef']
-  ];
-  let role=''; const low=text.toLowerCase(); for(const [k,v] of roles){if(low.includes(k)){role=v;break;}}
   let cause='Cause du décès non précisée dans les informations publiques récupérées.';
-  const causePatterns=[/des suites (?:d['’]|de )([^.;]{3,100})/i,/à la suite d(?:e|['’]) ([^.;]{3,100})/i,/mort(?:e)? dans (un accident[^.;]{0,80})/i,/décéd(?:é|ée) dans (un accident[^.;]{0,80})/i];
+  const causePatterns=[/des suites (?:d['’]|de )([^.;]{3,100})/i,/mort(?:e)? (?:des suites|à la suite) ([^.;]{3,100})/i,/tué(?:e)? dans ([^.;]{3,100})/i,/victime d['’]un ([^.;]{3,100})/i];
   for(const re of causePatterns){const m=text.match(re);if(m){cause=`La source indique : ${m[0].replace(/^[a-zà-ÿ]/,c=>c.toUpperCase())}.`;break;}}
-  if(cause.startsWith('Cause du') && /\bcancer\b/i.test(text)) cause='La source évoque un cancer comme cause ou contexte du décès.';
-  const ageMatch=text.match(/(?:à|a)\s+(\d{1,3})\s+ans/i);
-  const age=ageMatch?Number(ageMatch[1]):null;
-  const whoBase=person&&role?`${person} était ${role}.`:role?`Il s’agissait de ${role}.`:(desc?desc.split(/(?<=[.!?])\s+/)[0]:'La source revient sur son parcours et son importance publique.');
-  const who=age&&age>0&&age<130?`${whoBase} La personne avait ${age} ans.`:whoBase;
-  return {person:person||'Personnalité décédée',who,cause};
+  return {person:person||'Personnalité décédée',who:'Biographie non disponible.',cause,deathInfo:''};
 }
 
 const topicStopWords=new Set('de du des le la les un une et ou en au aux à a l d pour par sur dans avec sans chez ce cet cette ces son sa ses leur leurs est sont a ont vers après avant plus moins très nouveau nouvelle nouveaux nouvelles actualité actu article video vidéo direct live belgique belge belges bruxelles monde international société societe politique economie sport culture sciences source media médias annonce annoncee annoncé selon après contre entre vers fait faire cette dimanche lundi mardi mercredi jeudi vendredi samedi aujourd hui hier demain'.split(/\s+/));
@@ -169,11 +175,25 @@ function cleanBriefTitle(v=''){return v.replace(/\s+[–—-]\s+(RTBF|RTL info|L
 function buildDailyBrief(items=[]){
   const target=shiftDayKey(brusselsDayKey(),-1);
   const yesterday=items.filter(n=>brusselsDayKey(new Date(n.date||0))===target&&!noiseBrief.test(n.title||''));
+  const sportItems=yesterday.filter(n=>n.category==='Sport');
+  const nonSportItems=yesterday.filter(n=>n.category!=='Sport');
   const clusters=[];
-  for(const item of yesterday){
+  for(const item of nonSportItems){
     let best=null,bestScore=0;
     for(const c of clusters){const score=Math.max(...c.items.map(x=>relatedScore(item,x)));if(score>bestScore){bestScore=score;best=c;}}
     if(best&&bestScore>=4) best.items.push(item); else clusters.push({items:[item]});
+  }
+
+  if(sportItems.length){
+    const sportSorted=[...sportItems].sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const picked=[]; const seenSport=new Set();
+    for(const item of sportSorted){
+      const key=[...titleTopicTokens(item)].slice(0,4).sort().join('|')||normalizeTopicText(item.title||'').slice(0,60);
+      if(seenSport.has(key)) continue;
+      seenSport.add(key); picked.push(item);
+      if(picked.length>=6) break;
+    }
+    clusters.push({items:picked,sportDigest:true});
   }
   const categoryWeight={International:6,Politique:6,'Économie':5,Sciences:5,'Belgique / Société':4,Culture:2,Sport:2,'Nécrologie':2};
   const ranked=clusters.map(c=>{
@@ -181,7 +201,9 @@ function buildDailyBrief(items=[]){
     const sources=[...new Set(sorted.map(x=>x.source).filter(Boolean))];
     const categories=[...new Set(sorted.map(x=>x.category).filter(Boolean))];
     const latest=sorted[0];
-    const score=sorted.length*2.2+sources.length*3.3+Math.max(...categories.map(x=>categoryWeight[x]||1));
+    const score=c.sportDigest
+      ? Math.min(9,3+sources.length*1.2+Math.min(sorted.length,5))
+      : sorted.length*2.2+sources.length*3.3+Math.max(...categories.map(x=>categoryWeight[x]||1));
     return {...c,items:sorted,sources,categories,latest,score};
   }).sort((a,b)=>b.score-a.score||new Date(b.latest?.date)-new Date(a.latest?.date));
   return {day:target,total:yesterday.length,topics:ranked.length,points:ranked.slice(0,5).map((c,i)=>{
@@ -194,8 +216,10 @@ function buildDailyBrief(items=[]){
       seen.add(k); snippets.push(s);
       if(snippets.length>=3) break;
     }
-    const synthesis=snippets.join(' ').replace(/\s+/g,' ').trim();
-    return {id:`brief-${i}`,title:cleanBriefTitle(c.latest?.title||''),summary:synthesis,item:c.latest,count:c.items.length,sources:c.sources,articles:c.items.slice(0,6)};
+    const synthesis=c.sportDigest
+      ? c.items.slice(0,4).map(x=>`• ${sportCompactSummary(x)}`).join(' ')
+      : snippets.join(' ').replace(/\s+/g,' ').trim();
+    return {id:`brief-${i}`,title:c.sportDigest?'Sport — l’essentiel d’hier':cleanBriefTitle(c.latest?.title||''),summary:synthesis,item:c.latest,count:c.items.length,sources:c.sources,articles:c.items.slice(0,6),sportDigest:!!c.sportDigest};
   })};
 }
 function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
@@ -208,7 +232,7 @@ const tutorialSteps=[
   {title:'Bienvenue dans IHECS Test Actus',text:'L’app rassemble l’actualité utile à tes tests, organise la matière depuis le dernier test de chaque prof et te permet de réviser avec des questions adaptées.',tab:'Accueil'},
   {title:'Actus',text:'Dans Actus, tu retrouves le fil complet, les Actus d’hier, l’ajout d’un article et une rubrique Nécrologie dédiée aux décès de personnalités.',tab:'Actus'},
   {title:'Filtrer l’actualité',text:'Dans Actus, affiche tout, uniquement ce qui est paru depuis le test de Mr Gras, depuis celui de Mr Leconte, ou depuis une date précise.',tab:'Actus'},
-  {title:'Nécrologie',text:'La rubrique Nécrologie privilégie les articles avec photo et résume qui est décédé, qui était la personne et la cause du décès uniquement lorsqu’elle est explicitement mentionnée par la source.',tab:'Actus'},
+  {title:'Nécrologie',text:'La rubrique Nécrologie ne garde que les personnes identifiées de façon fiable avec une photo correspondant réellement à la personne. Elle résume qui c’était, la date du décès et la cause uniquement lorsqu’elle est documentée.',tab:'Actus'},
   {title:'Révisions',text:'Dans Révisions, tu retrouves les modes d’entraînement, les tests fictifs de Mr Gras et Mr Leconte, ainsi que Mes tests et les dates à connaître.',tab:'Révisions'},
   {title:'Ajouter une information',text:'Le bouton Ajouter se trouve maintenant dans Actus. Colle un lien et l’app prépare une fiche qui peut intégrer tes révisions.',tab:'Actus'},
   {title:'Sur téléphone',text:'Installe l’app depuis ton navigateur pour l’utiliser comme une vraie application. Tu peux aussi programmer ton rappel quotidien depuis l’accueil.',tab:'Accueil'},
@@ -295,7 +319,7 @@ function App(){
   },[]);
 
   useEffect(()=>{
-    if(notifStatus==='granted') syncPushSubscription({enabled:reminderEnabled,time:reminderTime});
+    if(notifStatus==='granted' && reminderEnabled) syncPushSubscription({enabled:true,time:reminderTime});
   },[reminderEnabled,reminderTime,notifStatus]);
 
   const loadNews=async(sinceOverride=null,{silent=false}={})=>{
@@ -358,7 +382,7 @@ function App(){
       const r=await fetch('/api/obituaries',{cache:'no-store'});
       const data=await r.json();
       if(!r.ok) throw new Error(data?.error||'Impossible de charger la nécrologie');
-      setObituaries(Array.isArray(data.items)?data.items:[]);
+      setObituaries((Array.isArray(data.items)?data.items:[]).filter((x,i,a)=>a.findIndex(y=>(y.qid&&x.qid?y.qid===x.qid:(y.person||'').toLowerCase()===(x.person||'').toLowerCase()))===i));
     }catch(e){
       setObitError(e?.message||'Impossible de charger la nécrologie');
       setObituaries([]);
@@ -858,39 +882,99 @@ function App(){
     setAddMessage(msg); setDraft(null); setAddUrl(''); setAddText(''); setShareGlobal(false);
   };
 
-  const syncPushSubscription=async({enabled=reminderEnabled,time=reminderTime,forceRenew=false}={})=>{
+  const logPushDiagnostic=async(stage,status,message='')=>{
+    try{await fetch('/api/push-diagnostic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage,status,message:String(message||'').slice(0,700)})});}catch{}
+  };
+  const ensurePushRegistration=async()=>{
+    if(!('serviceWorker' in navigator)) throw new Error('Service worker non pris en charge.');
+    const reg=await navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(APP_VERSION)}`,{scope:'/',updateViaCache:'none'});
+    try{await reg.update();}catch{}
+    if(reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
+    if(reg.installing){
+      await new Promise(resolve=>{
+        const w=reg.installing;
+        const done=()=>{if(w.state==='activated'||w.state==='redundant'){w.removeEventListener('statechange',done);resolve();}};
+        w.addEventListener('statechange',done); setTimeout(resolve,3500);
+      });
+    }
+    return navigator.serviceWorker.ready;
+  };
+  const syncPushSubscription=async({enabled=true,time=reminderTime,repair=false}={})=>{
     setPushMessage('');
-    if(typeof Notification==='undefined'){setPushServerStatus('setup');setPushMessage('Notifications non prises en charge sur ce navigateur.');return false;}
-    if(Notification.permission!=='granted'){setPushServerStatus('setup');setPushMessage('Autorise d’abord les notifications.');return false;}
-    if(!('serviceWorker' in navigator)||!('PushManager' in window)){setPushServerStatus('setup');setPushMessage('Push non pris en charge sur cet appareil.');return false;}
+    const fail=async(stage,msg)=>{setPushServerStatus('setup');setPushMessage(msg);await logPushDiagnostic(stage,'error',msg);return null;};
+    if(!window.isSecureContext) return fail('secure-context','L’app doit être ouverte en HTTPS pour les notifications.');
+    if(typeof Notification==='undefined') return fail('notification-api','Notifications non prises en charge sur ce navigateur.');
+    if(Notification.permission!=='granted') return fail('permission','Autorise d’abord les notifications.');
+    if(!('PushManager' in window)) return fail('push-api','Le push web n’est pas pris en charge sur cet appareil.');
     setPushServerStatus('connecting');
     try{
-      const cfgResp=await fetch('/api/push-config',{cache:'no-store'});
+      await logPushDiagnostic('start','info',`enabled=${enabled}; repair=${repair}`);
+      const cfgResp=await fetch(`/api/push-config?_=${Date.now()}`,{cache:'no-store'});
       const cfg=await cfgResp.json();
-      if(!cfgResp.ok||!cfg?.configured||!cfg?.publicKey) throw new Error(cfg?.error||'Configuration push indisponible');
-      const reg=await navigator.serviceWorker.ready;
+      if(!cfgResp.ok||!cfg?.configured||!cfg?.publicKey) throw new Error(cfg?.error||'Configuration push indisponible.');
+      const reg=await ensurePushRegistration();
       let sub=await reg.pushManager.getSubscription();
-      if(forceRenew&&sub){try{await sub.unsubscribe()}catch{} sub=null;}
+      if(repair&&sub){try{await sub.unsubscribe();await logPushDiagnostic('unsubscribe','ok','Ancien abonnement supprimé');}catch(e){await logPushDiagnostic('unsubscribe','warn',e?.message||String(e));}sub=null;}
       if(!sub&&enabled){
-        sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.publicKey)});
+        try{
+          const key=urlBase64ToUint8Array(cfg.publicKey);
+          sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+          await logPushDiagnostic('browser-subscribe','ok','Abonnement navigateur créé');
+        }catch(e){
+          return fail('browser-subscribe',`Abonnement push impossible : ${e?.name||'Erreur'}${e?.message?` — ${e.message}`:''}`);
+        }
       }
-      if(!sub){setPushServerStatus('idle');setPushMessage('Aucun abonnement push actif.');return false;}
+      if(!sub){setPushServerStatus('idle');setPushMessage('Rappel désactivé sur ce téléphone.');await logPushDiagnostic('subscription','idle','Aucun abonnement actif');return null;}
       const r=await fetch('/api/push-subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON(),reminderTime:time,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Brussels',enabled})});
       const data=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(data?.error||'Enregistrement du téléphone impossible');
+      if(!r.ok) throw new Error(data?.detail||data?.error||'Enregistrement du téléphone impossible.');
       setPushServerStatus(enabled?'active':'idle');
-      setPushMessage(enabled?'Téléphone enregistré pour les rappels serveur.':'Rappel désactivé sur ce téléphone.');
-      return true;
-    }catch(e){
-      setPushServerStatus('setup');
-      setPushMessage(e?.message||'Connexion au push impossible');
-      return false;
-    }
+      setPushMessage(enabled?`✓ Téléphone enregistré. Rappel prévu à ${time}.`:'Rappel désactivé sur ce téléphone.');
+      await logPushDiagnostic('server-register','ok',`enabled=${enabled}; time=${time}`);
+      return sub;
+    }catch(e){return fail('sync',e?.message||'Connexion au push impossible.');}
   };
   const requestNotifications=async()=>{
-    if(typeof Notification==='undefined'){setNotifStatus('unsupported');return}
-    const p=await Notification.requestPermission(); setNotifStatus(p);
+    if(typeof Notification==='undefined'){setNotifStatus('unsupported');setPushMessage('Notifications non prises en charge.');return;}
+    const p=await Notification.requestPermission(); setNotifStatus(p); await logPushDiagnostic('permission',p,p);
     if(p==='granted'){setReminderEnabled(true);await syncPushSubscription({enabled:true,time:reminderTime});}
+    else setPushMessage('Permission refusée dans Android / le navigateur.');
+  };
+  const toggleReminder=async(checked)=>{
+    setReminderEnabled(checked);
+    if(typeof Notification==='undefined') return;
+    if(checked&&Notification.permission!=='granted'){await requestNotifications();return;}
+    if(Notification.permission==='granted') await syncPushSubscription({enabled:checked,time:reminderTime});
+  };
+  const runServerPushTest=async(sub)=>{
+    const r=await fetch('/api/push-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON()})});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(data?.detail||data?.error||'Échec du test serveur.');
+    return true;
+  };
+  const testNotification=async()=>{
+    setPushMessage('Préparation du test…');
+    if(!('Notification' in window)){setNotifStatus('unsupported');setPushMessage('Notifications non prises en charge.');return;}
+    let permission=Notification.permission;
+    if(permission!=='granted'){permission=await Notification.requestPermission();setNotifStatus(permission);await logPushDiagnostic('permission',permission,permission);}
+    if(permission!=='granted'){setPushMessage('Permission de notification refusée.');return;}
+    setReminderEnabled(true);
+    const sub=await syncPushSubscription({enabled:true,time:reminderTime});
+    if(!sub) return;
+    try{await runServerPushTest(sub);setPushServerStatus('active');setPushMessage('✓ Test serveur envoyé. La notification doit arriver dans quelques secondes.');await logPushDiagnostic('test-send','ok','Push test envoyé');}
+    catch(e){const msg=e?.message||'Échec du test push.';setPushServerStatus('setup');setPushMessage(msg);await logPushDiagnostic('test-send','error',msg);}
+  };
+  const repairNotifications=async()=>{
+    setPushMessage('Réparation des notifications…');
+    if(!('Notification' in window)){setPushMessage('Notifications non prises en charge.');return;}
+    let permission=Notification.permission;
+    if(permission!=='granted'){permission=await Notification.requestPermission();setNotifStatus(permission);await logPushDiagnostic('permission',permission,permission);}
+    if(permission!=='granted'){setPushMessage('Autorisation de notification nécessaire.');return;}
+    setReminderEnabled(true);
+    const sub=await syncPushSubscription({enabled:true,time:reminderTime,repair:true});
+    if(!sub) return;
+    try{await runServerPushTest(sub);setPushServerStatus('active');setPushMessage('✓ Notifications réparées et test serveur envoyé.');await logPushDiagnostic('repair-test','ok','Push de réparation envoyé');}
+    catch(e){const msg=e?.message||'Erreur inconnue';setPushServerStatus('setup');setPushMessage(`Abonnement enregistré, mais l’envoi échoue : ${msg}`);await logPushDiagnostic('repair-test','error',msg);}
   };
   const closeTutorial=()=>{ localStorage.setItem('ihecs-tutorial-seen-v1','1'); setTutorialOpen(false); setTutorialStep(0); };
   const relaunchTutorial=()=>{ setTutorialStep(0); setTutorialOpen(true); };
@@ -900,28 +984,7 @@ function App(){
   };
   const tutorialPrev=()=>setTutorialStep(i=>Math.max(0,i-1));
 
-  const testNotification=async()=>{
-    setPushMessage('');
-    if(!('Notification' in window)){setNotifStatus('unsupported');setPushMessage('Notifications non prises en charge.');return;}
-    let permission=Notification.permission;
-    if(permission!=='granted'){permission=await Notification.requestPermission();setNotifStatus(permission);}
-    if(permission!=='granted'){setPushMessage('Permission de notification refusée.');return;}
-    const ok=await syncPushSubscription({enabled:true,time:reminderTime,forceRenew:true});
-    if(!ok) return;
-    try{
-      const reg=await navigator.serviceWorker.ready;
-      const sub=await reg.pushManager.getSubscription();
-      if(!sub) throw new Error('Abonnement push absent');
-      const r=await fetch('/api/push-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON()})});
-      const data=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(data?.error||'Échec du test serveur');
-      setPushServerStatus('active');
-      setPushMessage('Notification test envoyée. Elle doit arriver dans quelques secondes.');
-    }catch(e){
-      setPushServerStatus('setup');
-      setPushMessage(e?.message||'Échec du test push');
-    }
-  };
+
   const installApp=async()=>{
     if(!installPrompt) return;
     await installPrompt.prompt();
@@ -958,7 +1021,7 @@ function App(){
           </article>)}</div>
         </section>
 
-        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Choisis ton heure de rappel et vérifie immédiatement que ton téléphone autorise bien les notifications.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}<button className="secondary" onClick={testNotification}>Tester la notification</button>{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">{pushMessage||(pushServerStatus==='active'?'✓ Push serveur actif : le rappel fonctionnera même si l’app est fermée.':pushServerStatus==='connecting'?'Connexion au push serveur…':pushServerStatus==='setup'?'Connexion au serveur push impossible pour le moment.':'Active les notifications puis utilise “Tester la notification”.')}</small></section>
+        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Notifications</h2><p>Choisis l’heure puis lance la réparation : l’app recrée l’abonnement du téléphone et envoie un vrai push serveur.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Autoriser les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>toggleReminder(e.target.checked)}/> Rappel actif</label>}<button className="secondary" onClick={testNotification}>Tester</button><button className="secondary repairNotifBtn" onClick={repairNotifications}>Réparer + tester</button>{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className={`reminderNote pushState ${pushServerStatus}`}>{pushMessage||(pushServerStatus==='active'?`✓ Push serveur actif. Rappel quotidien à ${reminderTime}.`:pushServerStatus==='connecting'?'Connexion au push serveur…':pushServerStatus==='setup'?'Le téléphone n’est pas encore enregistré côté serveur.':'Active les notifications puis lance « Réparer + tester ».')}</small></section>
 
         <section><div className="sectionTitle"><div><p className="eyebrow">À surveiller</p><h2>Dernières actualités</h2></div><button className="textBtn" onClick={()=>navTo('Actus')}>Tout voir →</button></div>
           {loading?<Skeleton/>:error?<Empty text={error}/>:<div className="headlineList">{combinedNews.slice(0,7).map((n,i)=><NewsRow key={n.id} n={n} index={i+1} onOpen={()=>openArticle(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
@@ -991,7 +1054,7 @@ function App(){
 
       {tab==='Actus'&&actusView==='necrologie'&&<section className="noTop">
         <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
-        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une fiche courte pour retenir qui est décédé, qui était la personne et la cause du décès uniquement lorsqu’elle est explicitement mentionnée par une source. Les cartes sans photo exploitable ne sont pas affichées.</p></div></div>
+        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une seule fiche par personnalité : photo vérifiée de la personne, qui elle était, ce que les sources disent du décès et les articles qui en parlent. Si l’identité ou la photo ne peut pas être vérifiée, la fiche n’est pas affichée.</p></div></div>
         <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''}`:''}</span></div>
         {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text="Aucune personnalité avec photo et source exploitable trouvée pour le moment."/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}
@@ -1087,42 +1150,19 @@ function SmartImage({item,className='',alt='',fallback=null}){
 
 
 function ObituaryCard({item,onOpen}){
-  const info=obituaryInfo(item);
-  const [src,setSrc]=useState(item?.image||'');
-  const [state,setState]=useState(item?.image?'ready':'loading');
-  useEffect(()=>{
-    let alive=true;
-    setSrc(item?.image||'');
-    setState(item?.image?'ready':'loading');
-    if(item?.image) return ()=>{alive=false};
-    const resolve=async()=>{
-      let found='';
-      if(item?.url){
-        try{
-          const r=await fetch(`/api/article-image?url=${encodeURIComponent(item.url)}`);
-          const d=r.ok?await r.json():null;
-          found=d?.image||'';
-        }catch{}
-      }
-      if(!found && info.person && info.person!=='Personnalité décédée'){
-        try{
-          const r=await fetch(`/api/person-image?name=${encodeURIComponent(info.person)}`);
-          const d=r.ok?await r.json():null;
-          found=d?.image||'';
-        }catch{}
-      }
-      if(!alive) return;
-      setSrc(found);
-      setState(found?'ready':'missing');
-    };
-    resolve();
-    return()=>{alive=false};
-  },[item?.image,item?.url,info.person]);
-
-  if(state==='missing') return null;
-  return <article className={`obituaryCard ${state==='loading'?'obituaryLoading':''}`}>
-    {state==='loading'?<div className="obituaryPhotoSkeleton"><span>Recherche de la photo…</span></div>:<img src={src} alt={`Photo de ${info.person}`} loading="lazy" referrerPolicy="no-referrer" onError={()=>{setSrc('');setState('missing')}}/>}
-    <div className="obituaryBody"><div className="cardMeta"><span>{item.source}</span><span>{fmtNews(item.date)}</span></div><h3>{info.person}</h3><div className="obituaryFact"><span>Qui c’était</span><p>{info.who}</p></div><div className="obituaryFact"><span>Décès</span><p>{info.cause}</p></div><div className="obituaryActions"><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button><a href={item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>
+  const sources=Array.isArray(item.sources)?item.sources:[];
+  if(!item?.image||!item?.person) return null;
+  return <article className="obituaryCard obituaryVerified">
+    <img src={item.image} alt={`Photo de ${item.person}`} loading="lazy" referrerPolicy="no-referrer"/>
+    <div className="obituaryBody">
+      <div className="cardMeta"><span>{sources.length>1?`${sources.length} sources`:item.source}</span><span>{fmtNews(item.date)}</span></div>
+      <h3>{item.person}</h3>
+      {item.age&&<div className="obituaryAge">Décédé{item.gender==='female'?'e':''} à {item.age} ans</div>}
+      <div className="obituaryFact"><span>Qui c’était</span><p>{item.who}</p></div>
+      <div className="obituaryFact"><span>Ce qu’on sait du décès</span><p>{item.cause}</p></div>
+      {sources.length>1&&<div className="obituarySources">{sources.slice(0,4).map(s=><a key={`${s.source}-${s.url}`} href={s.url} target="_blank" rel="noreferrer">{s.source} ↗</a>)}</div>}
+      <div className="obituaryActions"><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button><a href={item.url} target="_blank" rel="noreferrer">Article principal ↗</a></div>
+    </div>
   </article>
 }
 

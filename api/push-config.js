@@ -1,4 +1,5 @@
 export default async function handler(req,res){
+  res.setHeader('Cache-Control','no-store, max-age=0');
   try{
     const r=await fetch('https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push?action=config',{cache:'no-store'});
     const body=await r.text();res.status(r.status).setHeader('Content-Type','application/json').send(body);
