@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v5.8';
+const APP_VERSION='v6.0';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -245,6 +245,7 @@ function App(){
   const [obituaries,setObituaries]=useState([]);
   const [obitLoading,setObitLoading]=useState(false);
   const [obitError,setObitError]=useState('');
+  const [obitStats,setObitStats]=useState(null);
   const [pushMessage,setPushMessage]=useState('');
   const [revisionView,setRevisionView]=useState('menu');
   const [tests,setTests]=useState(()=>safeJson('veille-tests',{qcm:'2026-09-21',photo:'2026-09-05'}));
@@ -284,6 +285,8 @@ function App(){
   const [photoAnswer,setPhotoAnswer]=useState('');
   const [photoDeckLoading,setPhotoDeckLoading]=useState(false);
   const [photoDeckMessage,setPhotoDeckMessage]=useState('');
+  const [deckBuildMessage,setDeckBuildMessage]=useState('');
+  const [pendingDeckRequest,setPendingDeckRequest]=useState(null);
   const [saved,setSaved]=useState(()=>safeJson('veille-saved',[]));
   const [reminderTime,setReminderTime]=useState(()=>localStorage.getItem('veille-reminder-time')||'19:00');
   const [reminderEnabled,setReminderEnabled]=useState(()=>localStorage.getItem('veille-reminder-enabled')==='1');
@@ -593,6 +596,121 @@ function App(){
     }
     return x;
   };
+
+  const countryNames=['Belgique','France','Allemagne','Pays-Bas','Rwanda','Ukraine','Russie','Iran','Israël','États-Unis','Royaume-Uni','Italie','Espagne','Portugal','Canada','Chine','Japon','Inde','Pologne','Hongrie','Turquie','Syrie','Liban','Qatar','Arabie saoudite','Australie','Brésil','Argentine','Mexique','Suède','Norvège','Danemark','Finlande','Suisse','Autriche','Grèce','Irlande','Roumanie'];
+  const actionVerbRe='annonce|propose|confirme|dément|réclame|demande|présente|dévoile|publie|signe|quitte|rejoint|lance|veut|promet|condamne|refuse|accepte|adopte|approuve|rejette|suspend|supprime|autorise|interdit|rouvre|ferme|remporte|gagne|reçoit|décroche|obtient|bat|élimine|domine|devient|nomme|soutient|accuse|appelle';
+  const cleanSubject=(v='')=>cleanAnswerText(v).replace(/^(La|Le|Les|L['’])\s+/i,'').trim();
+
+  const firstKnownOrganisation=(title='')=>{
+    const m=title.match(knownOrg);
+    return m?cleanAnswerText(m[0]):'';
+  };
+
+  const firstCountry=(title='')=>{
+    const low=normalizeTopicText(title);
+    for(const c of countryNames){
+      if(low.includes(normalizeTopicText(c))) return c;
+    }
+    return '';
+  };
+
+  const firstStrongPerson=(title='')=>{
+    const clean=cleanTitle(title).replace(/[«»“”"]/g,' ');
+    const matches=clean.match(/\b[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]{2,}(?:\s+(?:de|du|van|von|der|den|d['’]))?\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]{2,}(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]{2,})?\b/g)||[];
+    return matches.find(x=>looksLikePerson(x) && !/^(Union Européenne|Commission Européenne|Brussels Airport|Donald Duck)$/i.test(x))||'';
+  };
+
+  const factFromActionTitle=(item)=>{
+    const t=cleanTitle(item?.title||'');
+    if(!t) return null;
+    let m;
+
+    // Sujet clairement placé au début du titre + verbe d'action.
+    m=t.match(new RegExp(`^(.{2,72}?)\\s+(${actionVerbRe})\\s+(.+)$`,'i'));
+    if(m){
+      const rawSubject=cleanAnswerText(m[1]);
+      const subject=cleanSubject(rawSubject);
+      const verb=m[2].toLowerCase();
+      const object=clipDecision(m[3],120);
+      const kind=looksLikePerson(subject)?'person':looksLikeOrganisation(rawSubject)?'organisation':'unknown';
+      if(kind!=='unknown'&&object.length>=8){
+        return {
+          question:kind==='person'?`Qui ${verb} ${object} ?`:`Quelle organisation ${verb} ${object} ?`,
+          answer:kind==='person'?subject:rawSubject,
+          type:'entity',
+          answerKind:kind,
+          quality:10
+        };
+      }
+      // Si le sujet est fiable mais qu'il vaut mieux interroger la décision, on garde une flashcard.
+      const country=firstCountry(rawSubject);
+      if((country||knownOrg.test(rawSubject))&&object.length>=12){
+        return {
+          question:`Qu’a ${rawSubject} ${verb} ?`,
+          answer:object,
+          type:'text',
+          answerKind:'event',
+          quality:9
+        };
+      }
+    }
+
+    // "X : ..." avec X = personne / organisation / pays et une information suffisamment concrète.
+    m=t.match(/^([^:]{3,70})\s*:\s*(.{15,180})$/);
+    if(m){
+      const subject=cleanAnswerText(m[1]);
+      const detail=clipDecision(m[2],125);
+      if(looksLikePerson(subject)){
+        return {question:`Quelle actualité récente concerne ${subject} ?`,answer:detail,type:'text',answerKind:'event',quality:8};
+      }
+      if(looksLikeOrganisation(subject)||firstCountry(subject)){
+        return {question:`Quel fait récent est associé à ${subject} ?`,answer:detail,type:'text',answerKind:'event',quality:8};
+      }
+    }
+
+    // Un seul nom propre fort dans le titre : on peut demander le fait précis en flashcard.
+    const person=firstStrongPerson(t);
+    if(person){
+      const masked=clipDecision(maskAnswer(t,person),125);
+      if(masked&&masked!==t&&!/\[à trouver\].*\[à trouver\]/i.test(masked)){
+        const answer=clipDecision(t.replace(new RegExp(person.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'),'').replace(/^[\s:–—-]+|[\s:–—-]+$/g,''),120);
+        if(answer.length>=12) return {question:`Que s’est-il passé concernant ${person} ?`,answer, type:'text',answerKind:'event',quality:8};
+      }
+    }
+
+    // Organisations connues au milieu du titre.
+    const org=firstKnownOrganisation(t);
+    if(org){
+      const rest=clipDecision(t.replace(new RegExp(org.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'),'').replace(/^[\s:–—-]+|[\s:–—-]+$/g,''),120);
+      if(rest.length>=12) return {question:`Quelle actualité récente concerne ${org} ?`,answer:rest,type:'text',answerKind:'event',quality:8};
+    }
+
+    return null;
+  };
+
+  const fallbackQuestion=(item)=>{
+    if(!item?.title||badQuizTitle(item.title)||lowValueForTest(item)) return null;
+    const t=cleanTitle(item.title);
+    // Dernier filet de sécurité : uniquement pour les articles jugés importants.
+    if(testImportance(item)<3) return null;
+    const person=firstStrongPerson(t);
+    if(person){
+      const answer=clipDecision((item.summaryShort||headlineSummary(t,item.category)||t),135);
+      if(answer.length>=18) return {question:`Pourquoi ${person} fait-il/elle l’actualité ?`,answer,type:'text',answerKind:'event',quality:7};
+    }
+    const org=firstKnownOrganisation(t);
+    if(org){
+      const answer=clipDecision((item.summaryShort||headlineSummary(t,item.category)||t),135);
+      if(answer.length>=18) return {question:`Pourquoi ${org} fait-elle l’actualité ?`,answer,type:'text',answerKind:'event',quality:7};
+    }
+    const country=firstCountry(t);
+    if(country){
+      const answer=clipDecision((item.summaryShort||headlineSummary(t,item.category)||t),135);
+      if(answer.length>=18) return {question:`Quel événement récent concerne ${country} ?`,answer,type:'text',answerKind:'event',quality:7};
+    }
+    return null;
+  };
+
   const makeFact=(item)=>{
     // v4.8 : moteur volontairement conservateur. Une question n'est créée que si
     // le titre contient un fait clair, mémorisable et une réponse proprement identifiable.
@@ -658,7 +776,7 @@ function App(){
       if(looksLikePerson(person)) return {question:`Quelle personnalité s’est exprimée sur ${subject.toLowerCase()} ?`,answer:person,type:'entity',answerKind:'person',quality:11};
     }
 
-    return null;
+    return factFromActionTitle(item)||fallbackQuestion(item);
   };
   const withLead=(item,fact)=> fact ? ({...fact,lead:questionLead(item,fact.answer)}) : null;
 
@@ -771,44 +889,155 @@ function App(){
     return shuffle(chosen);
   };
 
-  const buildDeck=(count=12,mode='gras')=>{
+  const buildDeck=(count=20,mode='gras')=>{
     setPhotoDeckMessage('');
-    let base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n.title);
-    if(mode==='essential') base=base.filter(n=>testImportance(n)>=5);
+    setDeckBuildMessage('Préparation des questions…');
+    setDeck([]);
+    setDeckIndex(0);
+    setFlashRevealed(false);
+    setQuizAnswer('');
+    setQuizResult(null);
+    setPhotoAnswer('');
 
-    if(!base.length) return;
-    // On évite à la fois les mêmes ARTICLES et les mêmes SUJETS vus récemment.
+    let base=(relevantNews.length?relevantNews:combinedNews).filter(n=>n?.title&&!lowValueForTest(n));
+    if(mode==='essential') base=base.filter(n=>testImportance(n)>=4);
+
+    if(!base.length){
+      setPendingDeckRequest({count,mode});
+      setDeckBuildMessage(loading?'Les actualités se chargent. La session démarrera automatiquement dès qu’elles sont prêtes.':'Aucune actualité exploitable dans cette période. Essaie “Toutes les actus” ou vérifie la date du dernier test.');
+      return;
+    }
+    setPendingDeckRequest(null);
+
     let pool=base.filter(n=>!recentTestIds.includes(n.id||n.url) && !recentTopicKeys.includes(topicKey(n)));
-    if(pool.length<Math.min(count*2,base.length)) pool=base.filter(n=>!recentTopicKeys.includes(topicKey(n)));
-    if(pool.length<Math.min(count,base.length)) pool=base;
-    const items=pickDiverseItems(pool,Math.min(Math.max(count*7,100),pool.length),[],recentTopicKeys.slice(-10));
-    const facts=items.map(item=>{const fact=withLead(item,makeFact(item));return fact?{item,...fact,topicKey:topicKey(item)}:null}).filter(Boolean);
-    let cards;
-    if(mode==='leconte'){
-      cards=shuffle(facts.filter(x=>x.item.image)).slice(0,Math.min(count,facts.length)).map(x=>({...x,kind:'photo'}));
-    }else{
-      // Une seule question par sujet dans la session, même si plusieurs médias parlent du même événement.
-      const seenTopics=new Set();
-      let candidateFacts=facts.filter(x=>x.quality>=9 && x.question && x.answer && !/cette actualité|dans cette actualité|au sujet de|que faut-il retenir/i.test(x.question));
-      if(mode==='people') candidateFacts=candidateFacts.filter(x=>x.answerKind==='person');
-      const reliable=shuffle(candidateFacts).filter(f=>{
-        if(!f.topicKey || seenTopics.has(f.topicKey)) return false;
-        seenTopics.add(f.topicKey); return true;
-      });
-      cards=[];
-      for(const fact of reliable){
-        const options=buildOptions(fact,reliable);
-        // Un QCM n'existe que si les 4 propositions sont du même type. Sinon, flashcard précise.
-        cards.push({...fact,kind:options.length===4?'mcq':'flash',options});
+    if(pool.length<Math.min(count*3,base.length)) pool=base.filter(n=>!recentTopicKeys.includes(topicKey(n)));
+    if(pool.length<Math.min(count*2,base.length)) pool=base;
+
+    const items=pickDiverseItems(pool,Math.min(Math.max(count*14,260),pool.length),[],recentTopicKeys.slice(-8));
+    const facts=items.map(item=>{
+      const fact=withLead(item,makeFact(item));
+      return fact?{item,...fact,topicKey:topicKey(item)}:null;
+    }).filter(Boolean);
+
+    const scoreFact=f=>(f.quality||0)*10+testImportance(f.item);
+    facts.sort((a,b)=>scoreFact(b)-scoreFact(a));
+
+    const selectedFacts=[];
+    const seenTopics=new Set();
+    for(const f of facts){
+      if(mode==='people' && !(f.answerKind==='person'||firstStrongPerson(f.item?.title||''))) continue;
+      const tk=f.topicKey||topicKey(f.item);
+      if(!tk||seenTopics.has(tk)) continue;
+      seenTopics.add(tk);
+      selectedFacts.push(f);
+      if(selectedFacts.length>=count) break;
+    }
+
+    // Second passage: a different article may be used if the strict topic rule leaves too few cards.
+    if(selectedFacts.length<count){
+      const usedIds=new Set(selectedFacts.map(f=>f.item.id||f.item.url));
+      for(const f of facts){
+        if(mode==='people' && !(f.answerKind==='person'||firstStrongPerson(f.item?.title||''))) continue;
+        const id=f.item.id||f.item.url;
+        if(usedIds.has(id)) continue;
+        usedIds.add(id);
+        selectedFacts.push(f);
+        if(selectedFacts.length>=count) break;
+      }
+    }
+
+    const cards=[];
+    for(const fact of selectedFacts){
+      const options=buildOptions(fact,selectedFacts);
+      cards.push({...fact,kind:options.length===4?'mcq':'flash',options});
+    }
+
+    // Filet de sécurité : jamais une page vide si l'app a des actualités.
+    // Ces cartes restent factuelles : la réponse est le titre/résumé de l'article source,
+    // et on ne fabrique aucun faux distracteur.
+    if(cards.length<Math.min(count,8)){
+      const usedIds=new Set(cards.map(c=>c.item.id||c.item.url));
+      const fallbackPool=pickDiverseItems(base,Math.min(Math.max(count*4,60),base.length),[...usedIds],[]);
+      for(const item of fallbackPool){
+        const id=item.id||item.url;
+        if(usedIds.has(id)) continue;
+        const title=cleanTitle(item.title||'');
+        if(!title||badQuizTitle(title)) continue;
+
+        const person=firstStrongPerson(title);
+        const org=firstKnownOrganisation(title);
+        const country=firstCountry(title);
+        const summaries=displaySummaries(item);
+        let question='',answer='';
+
+        const colon=title.match(/^([^:]{4,75})\s*:\s*(.{12,170})$/);
+        if(colon){
+          const subject=cleanAnswerText(colon[1]);
+          question=`Quel fait d’actualité est associé à ${subject} ?`;
+          answer=clipDecision(colon[2],140);
+        }else if(person){
+          question=`Pourquoi ${person} fait-il/elle l’actualité ?`;
+          answer=clipDecision(summaries.short||title,145);
+        }else if(org){
+          question=`Quelle actualité récente concerne ${org} ?`;
+          answer=clipDecision(summaries.short||title,145);
+        }else if(country){
+          question=`Quel événement récent concerne ${country} ?`;
+          answer=clipDecision(summaries.short||title,145);
+        }else if(item.category==='Sport'){
+          question='Quel résultat ou événement sportif faut-il retenir ?';
+          answer=clipDecision(title,145);
+        }else if(item.category==='Politique'){
+          question='Quelle décision ou évolution politique faut-il retenir ?';
+          answer=clipDecision(title,145);
+        }else if(item.category==='International'){
+          question='Quel événement international faut-il retenir ?';
+          answer=clipDecision(title,145);
+        }else if(item.category==='Économie'){
+          question='Quel fait économique faut-il retenir ?';
+          answer=clipDecision(title,145);
+        }else{
+          continue;
+        }
+
+        if(!question||!answer||answer.length<10) continue;
+        cards.push({
+          item,question,answer,type:'text',answerKind:'event',quality:6,
+          lead:questionLead(item,answer),topicKey:topicKey(item),kind:'flash',options:[]
+        });
+        usedIds.add(id);
         if(cards.length>=count) break;
       }
-      cards=shuffle(cards);
     }
-    setRecentTestIds(ids=>[...ids,...cards.map(c=>c.item.id||c.item.url)].slice(-60));
-    setRecentTopicKeys(keys=>[...keys,...cards.map(c=>c.topicKey||topicKey(c.item)).filter(Boolean)].slice(-40));
-    setDeck(cards); setDeckIndex(0); setFlashRevealed(false); setDeckStats({ok:0,review:0}); setQuiz(null); setQuizAnswer(''); setQuizResult(null); setPhotoAnswer('');
+
+    if(!cards.length){
+      setDeckBuildMessage('Aucune question n’a pu être construite à partir des articles disponibles. Appuie sur ↻ pour recharger les actus puis réessaie.');
+      return;
+    }
+
+    const finalCards=shuffle(cards.slice(0,count));
+    setRecentTestIds(ids=>[...ids,...finalCards.map(c=>c.item.id||c.item.url)].slice(-120));
+    setRecentTopicKeys(keys=>[...keys,...finalCards.map(c=>c.topicKey||topicKey(c.item)).filter(Boolean)].slice(-80));
+    setDeck(finalCards);
+    setDeckStats({ok:0,review:0});
+    setDeckBuildMessage(`${finalCards.length} question${finalCards.length>1?'s':''} prête${finalCards.length>1?'s':''}.`);
   };
-  const makeQuiz=()=>buildDeck(12,'gras');
+  const makeQuiz=()=>buildDeck(20,'gras');
+
+  useEffect(()=>{
+    if(pendingDeckRequest && !loading && combinedNews.length){
+      const req=pendingDeckRequest;
+      setPendingDeckRequest(null);
+      buildDeck(req.count,req.mode);
+    }
+  },[loading,combinedNews.length]);
+
+  useEffect(()=>{
+    if(tab==='Révisions' && revisionView==='tests' && !loading && combinedNews.length && deck.length===0 && !pendingDeckRequest && !photoDeckLoading){
+      buildDeck(20,'gras');
+    }
+  },[tab,revisionView,loading,combinedNews.length]);
+
   const resolvePhoto=async(item)=>{
     if(item?.image) return {...item,image:item.image};
     if(!item?.url) return null;
@@ -1056,7 +1285,7 @@ function App(){
         <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
         <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une seule fiche par personnalité, avec photo vérifiée et profil adapté : cinéma, sport, politique ou autre domaine. L’app vérifie aussi que la personne est bien décédée avant de l’afficher.</p></div></div>
         <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''}`:''}</span></div>
-        {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text="Aucune personnalité avec photo et source exploitable trouvée pour le moment."/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
+        {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text={obitStats?.candidates?`${obitStats.candidates} articles de décès ont été analysés, mais aucune fiche n’a encore pu être validée. Appuie sur “Actualiser la nécrologie”.`:"Aucune personnalité avec photo et source exploitable trouvée pour le moment."}/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}
 
       {tab==='Actus'&&actusView==='ajouter'&&<section className="noTop">
@@ -1070,17 +1299,18 @@ function App(){
       </section>}
 
       {tab==='Révisions'&&revisionView==='menu'&&<section className="noTop">
-        <div className="subTabs"><button className="active" onClick={()=>setRevisionView('menu')}>Révisions</button><button onClick={()=>setRevisionView('tests')}>Tests fictifs</button><button onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
+        <div className="subTabs"><button className="active" onClick={()=>setRevisionView('menu')}>Révisions</button><button onClick={()=>{setRevisionView('tests');buildDeck(20,'gras')}}>Tests fictifs</button><button onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
         <div className="revisionIntro"><div><p className="eyebrow">Révision intelligente</p><h2>Choisis ton mode</h2><p>Les exercices portent sur le contenu de l’actualité, jamais sur le nom du média qui a publié l’article.</p></div></div>
-        <div className="modeGrid"><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(12,'gras')}}><span>JUSQU’À 12 QUESTIONS · SUJETS ÉQUILIBRÉS</span><strong>Session Mr Gras</strong><small>QCM et questions précises sur des sujets différents</small></button><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(15,'essential')}}><span>15 QUESTIONS PRIORITAIRES</span><strong>Si j’avais un test demain</strong><small>Uniquement les sujets les plus importants de ta période</small></button><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(10,'people')}}><span>PERSONNALITÉS</span><strong>Qui est qui ?</strong><small>Noms, fonctions et personnes au cœur de l’actualité</small></button><button className="mode" onClick={()=>{setRevisionView('tests');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setActusView('fil');setTab('Actus');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setActusView('fil');setTab('Actus');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
+        <div className="modeGrid"><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(20,'gras')}}><span>JUSQU’À 20 QUESTIONS · SUJETS ÉQUILIBRÉS</span><strong>Session Mr Gras</strong><small>QCM et questions précises sur des sujets différents</small></button><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(25,'essential')}}><span>JUSQU’À 25 QUESTIONS PRIORITAIRES</span><strong>Si j’avais un test demain</strong><small>Uniquement les sujets les plus importants de ta période</small></button><button className="mode" onClick={()=>{setRevisionView('tests');buildDeck(15,'people')}}><span>PERSONNALITÉS</span><strong>Qui est qui ?</strong><small>Noms, fonctions et personnes au cœur de l’actualité</small></button><button className="mode" onClick={()=>{setRevisionView('tests');makePhotoTest()}}><span>6 PHOTOS</span><strong>Session Mr Leconte</strong><small>Photo → expliquer l’actualité</small></button><button className="mode" onClick={()=>{setActusView('fil');setTab('Actus');setCategory('Toutes')}}><span>ACTU</span><strong>Revoir les fiches</strong><small>{relevantNews.length} éléments dans la période</small></button><button className="mode" onClick={()=>{setActusView('fil');setTab('Actus');setQuery('')}}><span>★</span><strong>Mes articles sauvegardés</strong><small>{saved.length} sauvegardés</small></button></div>
       </section>}
 
       {tab==='Révisions'&&revisionView==='tests'&&<section className="noTop">
-        <div className="subTabs"><button onClick={()=>setRevisionView('menu')}>Révisions</button><button className="active" onClick={()=>setRevisionView('tests')}>Tests fictifs</button><button onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
-        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions uniquement à partir de faits clairement identifiés. Les réponses sont des personnes, pays ou organisations réelles, avec des choix du même type. Les sujets sont équilibrés entre politique, international, économie, société, culture, sciences et sport ; les articles ambigus sont ignorés. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(12,'gras')}>12 questions · Mr Gras</button><button className="secondary" onClick={()=>buildDeck(15,'essential')}>Test demain</button><button className="secondary" onClick={()=>buildDeck(10,'people')}>Personnalités</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
+        <div className="subTabs"><button onClick={()=>setRevisionView('menu')}>Révisions</button><button className="active" onClick={()=>{setRevisionView('tests');if(!deck.length)buildDeck(20,'gras')}}>Tests fictifs</button><button onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
+        <div className="examHeader"><div><p className="eyebrow">Mode entraînement</p><h2>Test d’actu fictif</h2><p className="muted">Mr Gras : questions uniquement à partir de faits clairement identifiés. Les réponses sont des personnes, pays ou organisations réelles, avec des choix du même type. Les sujets sont équilibrés entre politique, international, économie, société, culture, sciences et sport ; les articles ambigus sont ignorés. Mr Leconte : photos tirées d’autres actualités quand c’est possible.</p></div><div className="examBtns"><button onClick={()=>buildDeck(20,'gras')}>20 questions · Mr Gras</button><button className="secondary" onClick={()=>buildDeck(25,'essential')}>25 · Test demain</button><button className="secondary" onClick={()=>buildDeck(15,'people')}>15 · Personnalités</button><button className="secondary" onClick={makePhotoTest} disabled={photoDeckLoading}>{photoDeckLoading?'Recherche des photos…':'6 photos · Mr Leconte'}</button></div></div>
         {photoDeckLoading&&<div className="photoSearchStatus"><span className="spinner"/>Recherche des photos publiées avec les actualités…</div>}
         {!photoDeckLoading&&photoDeckMessage&&deck.length===0&&<div className="photoSearchStatus">{photoDeckMessage}</div>}
-        {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&<Empty text="Choisis une session Mr Gras ou Mr Leconte pour commencer."/>}
+        {!photoDeckLoading&&deckBuildMessage&&<div className={`questionBuildStatus ${deck.length?'ok':''}`}>{deckBuildMessage}</div>}
+        {deck.length===0&&!photoDeckLoading&&!photoDeckMessage&&!deckBuildMessage&&<div className="questionEmptyState"><strong>La session n’a pas encore démarré</strong><p>Appuie sur un mode ci-dessus. Si les actus sont encore en chargement, la session démarre automatiquement dès qu’elles arrivent.</p><button className="submit" onClick={()=>buildDeck(20,'gras')}>Lancer 20 questions</button></div>}
         {deck.length>0&&deckIndex<deck.length&&(()=>{const c=deck[deckIndex];return <article className="examCard flashExam">
           <div className="deckTop"><div className="questionNo">{c.kind==='photo'?'MR LECONTE · PHOTO':c.kind==='mcq'?'MR GRAS · QCM · UNE SEULE RÉPONSE':'MR GRAS · FLASHCARD'}</div><span>{deckIndex+1} / {deck.length}</span></div>
           <div className="progress"><i style={{width:`${((deckIndex+1)/deck.length)*100}%`}}/></div>
@@ -1103,11 +1333,11 @@ function App(){
           </>}
           {(flashRevealed||quizResult!==null)&&<div className="deckActions"><button className="review" onClick={()=>nextCard('review')}>À revoir</button><button className="know" onClick={()=>nextCard('ok')}>Je maîtrise →</button></div>}
         </article>})()}
-        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(12,'gras')}>Relancer une session</button></article>}
+        {deck.length>0&&deckIndex>=deck.length&&<article className="examCard resultCard"><p className="eyebrow">Session terminée</p><h3>{deckStats.ok} maîtrisée{deckStats.ok>1?'s':''} · {deckStats.review} à revoir</h3><p>Relance une session : les cartes sont tirées dans l’actualité de ta période de test.</p><button className="submit" onClick={()=>buildDeck(20,'gras')}>Relancer 20 questions</button></article>}
       </section>}
 
       {tab==='Révisions'&&revisionView==='mes-tests'&&<section className="noTop">
-        <div className="subTabs"><button onClick={()=>setRevisionView('menu')}>Révisions</button><button onClick={()=>setRevisionView('tests')}>Tests fictifs</button><button className="active" onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
+        <div className="subTabs"><button onClick={()=>setRevisionView('menu')}>Révisions</button><button onClick={()=>{setRevisionView('tests');buildDeck(20,'gras')}}>Tests fictifs</button><button className="active" onClick={()=>setRevisionView('mes-tests')}>Mes tests</button></div>
         <div className="testGrid">{profs.map(p=><article className="settingsCard" key={p.key}><span className="softPill">{p.label}</span><h2>{p.name}</h2><label>Date du dernier test d’actu</label><input type="date" value={tests[p.key]} max={today} onChange={e=>setTests(t=>({...t,[p.key]:e.target.value}))}/><div className="period compact"><span>Actualités à connaître depuis</span><strong>{fmt(nextDay(tests[p.key]))} → aujourd’hui</strong></div><button onClick={()=>markTest(p.key)}>Enregistrer un test aujourd’hui</button></article>)}</div>
         <div className="sectionTitle historyTitle"><div><p className="eyebrow">Archives</p><h2>Historique des tests</h2></div></div>{history.length===0?<Empty text="Aucun test archivé pour l’instant."/>:<div className="historyList">{history.map(h=><div key={h.id} className="historyItem"><div><strong>{h.prof==='qcm'?'Mr Gras — QCM':'Mr Leconte — Photo'}</strong><span>Test du {fmt(h.date)}</span></div><p>Matière archivée : {fmt(h.from)} → {fmt(h.to)}</p></div>)}</div>}
       </section>}

@@ -1,4 +1,4 @@
-const CACHE='ihecs-test-actus-v5.8';
+const CACHE='ihecs-test-actus-v6.0';
 const CORE=['/','/manifest.webmanifest','/icon.svg','/app-icon.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)).catch(()=>{}));self.skipWaiting()});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim()});

@@ -289,3 +289,19 @@
   .obituaryProfileItem strong{font-size:11px}
 }
 @media(max-width:390px){.obituaryProfileGrid{grid-template-columns:1fr}}
+
+/* v5.9 — moteur de questions renforcé */
+.questionBuildStatus{margin:12px 0;padding:12px 14px;border:1px solid #ddd7ce;background:#fff7ee;color:#6d5a42;border-radius:10px;font-size:13px;font-weight:650}
+.questionBuildStatus.ok{background:#f2f5ef;color:#44533f;border-color:#d8e0d2}
+.questionEmptyState{background:#fff;border:1px solid #e1ddd5;border-radius:14px;padding:22px;text-align:center;margin-top:14px}
+.questionEmptyState strong{display:block;font-family:'Newsreader',serif;font-size:24px;margin-bottom:6px}
+.questionEmptyState p{color:#777;max-width:520px;margin:0 auto 14px;line-height:1.5}
+@media(max-width:720px){
+  .examBtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .examBtns button{min-height:46px}
+  .questionBuildStatus{font-size:12px}
+}
+
+/* v6.0 — chargement des sessions */
+.questionBuildStatus{position:relative}
+.questionBuildStatus:has(+ .examCard){margin-bottom:8px}
