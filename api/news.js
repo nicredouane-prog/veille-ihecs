@@ -17,7 +17,7 @@ const attr=(xml,tagName,attrName)=>{const m=xml.match(new RegExp(`<${tagName}[^>
 
 function categoryFor(text=''){
   const t=text.toLowerCase();
-  if(/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|s['’]est éteint|s['’]est éteinte|disparition de|nous a quittés|meurt à|décède à)\b/.test(t)) return 'Nécrologie';
+  if(/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|décédé|décédée|s['’]est éteint|s['’]est éteinte|disparition de|disparu|disparue|nous a quittés|nous a quitté|meurt à|décède à|obsèques|funérailles|adieu à|hommage à)\b/.test(t)) return 'Nécrologie';
   if(/gouvernement|ministre|parlement|élection|parti|coalition|président|premier ministre|député|sénat|commission européenne|diplomat/.test(t)) return 'Politique';
   if(/guerre|ukraine|gaza|israël|otan|onu|international|chine|états-unis|russie|iran|moyen-orient|europe/.test(t)) return 'International';
   if(/euro|budget|inflation|banque|entreprise|emploi|économie|marché|prix|salaire|finance|bourse|énergie/.test(t)) return 'Économie';

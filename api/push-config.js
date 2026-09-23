@@ -1,5 +1,6 @@
 export default async function handler(req,res){
-  res.setHeader('Cache-Control','no-store');
-  const key=process.env.VAPID_PUBLIC_KEY||'';
-  res.status(200).json({configured:Boolean(key&&process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY),publicKey:key||null});
+  try{
+    const r=await fetch('https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push?action=config',{cache:'no-store'});
+    const body=await r.text();res.status(r.status).setHeader('Content-Type','application/json').send(body);
+  }catch(e){res.status(500).json({configured:false,error:'PUSH_PROXY_CONFIG_FAILED'});}
 }

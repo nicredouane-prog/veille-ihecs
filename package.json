@@ -1,7 +1,7 @@
 {
   "name": "veille-journalistique-ihecs",
   "private": true,
-  "version": "5.1.0",
+  "version": "5.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

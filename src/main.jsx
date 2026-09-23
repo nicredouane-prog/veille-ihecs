@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v5.1';
+const APP_VERSION='v5.5';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -75,7 +75,7 @@ function displaySummaries(item){
 
 function isObituary(item){
   const t=`${item?.title||''} ${item?.description||''}`.toLowerCase();
-  return item?.category==='Nécrologie'||/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|s['’]est éteint|s['’]est éteinte|disparition de|nous a quittés|meurt à|décède à)\b/.test(t);
+  return item?.category==='Nécrologie'||/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|décédé|décédée|s['’]est éteint|s['’]est éteinte|disparition de|disparu|disparue|nous a quittés|nous a quitté|meurt à|décède à|obsèques|funérailles|adieu à|hommage à)\b/.test(t);
 }
 function obituaryInfo(item){
   const title=(item?.title||'').replace(/\s+/g,' ').trim();
@@ -87,6 +87,12 @@ function obituaryInfo(item){
     /^([A-ZÀ-ÖØ-Ý][^,:;–—-]{3,60}),\s+.*(?:mort|décédé|décédée)/i
   ];
   let person=''; for(const re of personPatterns){const m=title.match(re);if(m){person=m[1].trim();break;}}
+  if(!person){
+    const lead=title.split(/[:–—|]/)[0].replace(/[«»"'“”]/g,'').trim();
+    const proper=lead.match(/^([A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Ý][A-Za-zÀ-ÿ'’.-]+){1,3})/);
+    if(proper) person=proper[1].trim();
+  }
+  person=person.replace(/^(Mort|Décès|Deces|Disparition|Hommage)\s+(de|à)\s+/i,'').trim();
   const roles=[
     ['acteur','un acteur'],['actrice','une actrice'],['chanteur','un chanteur'],['chanteuse','une chanteuse'],['journaliste','un·e journaliste'],['écrivain','un écrivain'],['écrivaine','une écrivaine'],['réalisateur','un réalisateur'],['réalisatrice','une réalisatrice'],['musicien','un musicien'],['musicienne','une musicienne'],['footballeur','un footballeur'],['footballeuse','une footballeuse'],['sportif','un sportif'],['sportive','une sportive'],['ministre','une personnalité politique'],['président','une personnalité politique'],['présidente','une personnalité politique'],['scientifique','un·e scientifique'],['artiste','un·e artiste'],['animateur','un animateur'],['animatrice','une animatrice'],['chef','un·e chef']
   ];
@@ -102,18 +108,50 @@ function obituaryInfo(item){
   return {person:person||'Personnalité décédée',who,cause};
 }
 
-const topicStopWords=new Set('de du des le la les un une et ou en au aux à a l d pour par sur dans avec sans chez ce cet cette ces son sa ses leur leurs est sont a ont vers après avant plus moins très nouveau nouvelle nouveaux nouvelles actualité actu article video vidéo direct live'.split(/\s+/));
-function topicTokens(item){
-  const raw=`${item?.title||''} ${item?.summaryShort||''} ${item?.description||''}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  return new Set(raw.replace(/[^a-z0-9'-]+/g,' ').split(/\s+/).filter(x=>x.length>3&&!topicStopWords.has(x)));
+const topicStopWords=new Set('de du des le la les un une et ou en au aux à a l d pour par sur dans avec sans chez ce cet cette ces son sa ses leur leurs est sont a ont vers après avant plus moins très nouveau nouvelle nouveaux nouvelles actualité actu article video vidéo direct live belgique belge belges bruxelles monde international société societe politique economie sport culture sciences source media médias annonce annoncee annoncé selon après contre entre vers fait faire cette dimanche lundi mardi mercredi jeudi vendredi samedi aujourd hui hier demain'.split(/\s+/));
+const genericTopicWords=new Set('mort morte morts décès deces enquête enquete ouvert ouverte retrouvé retrouve retrouvee retrouver annonce nouvelle nouvelles homme femme personne personnes pays ville gouvernement ministre président presidente equipe match jour nuit semaine'.split(/\s+/));
+function normalizeTopicText(value=''){
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9'’-]+/g,' ').replace(/[’']/g,"'").replace(/\s+/g,' ').trim();
+}
+function titleTopicTokens(item){
+  const raw=normalizeTopicText(item?.title||'');
+  return new Set(raw.split(/\s+/).filter(x=>x.length>3&&!topicStopWords.has(x)&&!genericTopicWords.has(x)));
+}
+function titleBigrams(item){
+  const words=[...titleTopicTokens(item)];
+  const out=new Set();
+  for(let i=0;i<words.length-1;i++) out.add(`${words[i]} ${words[i+1]}`);
+  return out;
+}
+function namedAnchors(item){
+  const title=(item?.title||'').replace(/[«»“”"()]/g,' ');
+  const parts=title.split(/[^A-Za-zÀ-ÖØ-öø-ÿ0-9'’-]+/).filter(Boolean);
+  const out=new Set();
+  for(const raw of parts){
+    const clean=normalizeTopicText(raw);
+    if(clean.length<4||topicStopWords.has(clean)||genericTopicWords.has(clean)) continue;
+    if(/^[A-ZÀ-ÖØ-Ý]/.test(raw)||/^[A-Z0-9]{2,}$/.test(raw)) out.add(clean);
+  }
+  return out;
 }
 function relatedScore(a,b){
   if(!a||!b||a.id===b.id) return 0;
-  const A=topicTokens(a),B=topicTokens(b); let common=0;
-  A.forEach(x=>{if(B.has(x)) common++});
-  const entityBoost=[...A].some(x=>B.has(x)&&x.length>=7)?1.5:0;
-  const catBoost=a.category===b.category?.toString()?0.5:0;
-  return common+entityBoost+catBoost;
+  const A=titleTopicTokens(a),B=titleTopicTokens(b);
+  const shared=[...A].filter(x=>B.has(x));
+  const anchorsA=namedAnchors(a),anchorsB=namedAnchors(b);
+  const sharedAnchors=[...anchorsA].filter(x=>anchorsB.has(x));
+  const bigA=titleBigrams(a),bigB=titleBigrams(b);
+  const sharedBigram=[...bigA].some(x=>bigB.has(x));
+  const union=new Set([...A,...B]);
+  const jaccard=union.size?shared.length/union.size:0;
+
+  // Un article n'est lié que si le sujet lui-même est reconnaissable :
+  // - au moins deux mots-clés spécifiques communs ; ou
+  // - un nom propre commun + un autre signal de contexte ; ou
+  // - une expression de deux mots commune.
+  const sameSubject = shared.length>=2 || sharedBigram || (sharedAnchors.length>=1 && shared.length>=1 && jaccard>=0.12);
+  if(!sameSubject) return 0;
+  return shared.length*2 + sharedAnchors.length*2.5 + (sharedBigram?3:0) + jaccard*4;
 }
 
 
@@ -135,11 +173,30 @@ function buildDailyBrief(items=[]){
   for(const item of yesterday){
     let best=null,bestScore=0;
     for(const c of clusters){const score=Math.max(...c.items.map(x=>relatedScore(item,x)));if(score>bestScore){bestScore=score;best=c;}}
-    if(best&&bestScore>=2.5) best.items.push(item); else clusters.push({items:[item]});
+    if(best&&bestScore>=4) best.items.push(item); else clusters.push({items:[item]});
   }
-  const categoryWeight={International:5,Politique:5,'Économie':4,Sciences:4,'Belgique / Société':3,Culture:2,Sport:2};
-  const ranked=clusters.map(c=>{const sources=[...new Set(c.items.map(x=>x.source).filter(Boolean))];const categories=[...new Set(c.items.map(x=>x.category).filter(Boolean))];const latest=[...c.items].sort((a,b)=>new Date(b.date)-new Date(a.date))[0];const score=c.items.length*2+sources.length*3+Math.max(...categories.map(x=>categoryWeight[x]||1));return {...c,sources,categories,latest,score};}).sort((a,b)=>b.score-a.score||new Date(b.latest?.date)-new Date(a.latest?.date));
-  return {day:target,total:yesterday.length,topics:ranked.length,points:ranked.slice(0,5).map((c,i)=>{const sum=displaySummaries(c.latest);const extra=c.items.length>1?` Sujet suivi dans ${c.items.length} articles (${c.sources.slice(0,4).join(', ')}${c.sources.length>4?'…':''}).`:'';return {id:`brief-${i}`,title:cleanBriefTitle(c.latest?.title||''),summary:`${sum.short||c.latest?.description||''}${extra}`.trim(),item:c.latest,count:c.items.length,sources:c.sources};})};
+  const categoryWeight={International:6,Politique:6,'Économie':5,Sciences:5,'Belgique / Société':4,Culture:2,Sport:2,'Nécrologie':2};
+  const ranked=clusters.map(c=>{
+    const sorted=[...c.items].sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const sources=[...new Set(sorted.map(x=>x.source).filter(Boolean))];
+    const categories=[...new Set(sorted.map(x=>x.category).filter(Boolean))];
+    const latest=sorted[0];
+    const score=sorted.length*2.2+sources.length*3.3+Math.max(...categories.map(x=>categoryWeight[x]||1));
+    return {...c,items:sorted,sources,categories,latest,score};
+  }).sort((a,b)=>b.score-a.score||new Date(b.latest?.date)-new Date(a.latest?.date));
+  return {day:target,total:yesterday.length,topics:ranked.length,points:ranked.slice(0,5).map((c,i)=>{
+    const seen=new Set();
+    const snippets=[];
+    for(const item of c.items){
+      const s=(displaySummaries(item).short||item.description||'').trim();
+      const k=normalizeTopicText(s).slice(0,120);
+      if(!s||seen.has(k)) continue;
+      seen.add(k); snippets.push(s);
+      if(snippets.length>=3) break;
+    }
+    const synthesis=snippets.join(' ').replace(/\s+/g,' ').trim();
+    return {id:`brief-${i}`,title:cleanBriefTitle(c.latest?.title||''),summary:synthesis,item:c.latest,count:c.items.length,sources:c.sources,articles:c.items.slice(0,6)};
+  })};
 }
 function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
 
@@ -149,7 +206,7 @@ const nav = [
 
 const tutorialSteps=[
   {title:'Bienvenue dans IHECS Test Actus',text:'L’app rassemble l’actualité utile à tes tests, organise la matière depuis le dernier test de chaque prof et te permet de réviser avec des questions adaptées.',tab:'Accueil'},
-  {title:'Actus',text:'Dans Actus, tu retrouves le fil complet, l’ajout d’un article et une rubrique Nécrologie dédiée aux décès de personnalités.',tab:'Actus'},
+  {title:'Actus',text:'Dans Actus, tu retrouves le fil complet, les Actus d’hier, l’ajout d’un article et une rubrique Nécrologie dédiée aux décès de personnalités.',tab:'Actus'},
   {title:'Filtrer l’actualité',text:'Dans Actus, affiche tout, uniquement ce qui est paru depuis le test de Mr Gras, depuis celui de Mr Leconte, ou depuis une date précise.',tab:'Actus'},
   {title:'Nécrologie',text:'La rubrique Nécrologie privilégie les articles avec photo et résume qui est décédé, qui était la personne et la cause du décès uniquement lorsqu’elle est explicitement mentionnée par la source.',tab:'Actus'},
   {title:'Révisions',text:'Dans Révisions, tu retrouves les modes d’entraînement, les tests fictifs de Mr Gras et Mr Leconte, ainsi que Mes tests et les dates à connaître.',tab:'Révisions'},
@@ -161,6 +218,10 @@ const tutorialSteps=[
 function App(){
   const [tab,setTab]=useState('Accueil');
   const [actusView,setActusView]=useState('fil');
+  const [obituaries,setObituaries]=useState([]);
+  const [obitLoading,setObitLoading]=useState(false);
+  const [obitError,setObitError]=useState('');
+  const [pushMessage,setPushMessage]=useState('');
   const [revisionView,setRevisionView]=useState('menu');
   const [tests,setTests]=useState(()=>safeJson('veille-tests',{qcm:'2026-09-21',photo:'2026-09-05'}));
   const [history,setHistory]=useState(()=>safeJson('veille-history',[]));
@@ -290,6 +351,23 @@ function App(){
     setEditingTestDate(null);
   };
 
+
+  const loadObituaries=async()=>{
+    setObitLoading(true); setObitError('');
+    try{
+      const r=await fetch('/api/obituaries',{cache:'no-store'});
+      const data=await r.json();
+      if(!r.ok) throw new Error(data?.error||'Impossible de charger la nécrologie');
+      setObituaries(Array.isArray(data.items)?data.items:[]);
+    }catch(e){
+      setObitError(e?.message||'Impossible de charger la nécrologie');
+      setObituaries([]);
+    }finally{setObitLoading(false);}
+  };
+  useEffect(()=>{
+    if(tab==='Actus'&&actusView==='necrologie'&&obituaries.length===0&&!obitLoading) loadObituaries();
+  },[tab,actusView]);
+
   const combinedNews=useMemo(()=>{
     // Une seule source de vérité pour l'ordre : date/heure de publication décroissante.
     // Les ajouts manuels/partagés ne peuvent plus casser l'ordre chronologique du flux.
@@ -344,12 +422,17 @@ function App(){
 
   const relatedToSelected=useMemo(()=>{
     if(!selected) return [];
+    const selectedTime=new Date(selected.date||0).getTime();
     return combinedNews
-      .filter(n=>n.id!==selected.id && new Date(n.date||0)>=new Date(selected.date||0))
+      .filter(n=>{
+        if(n.id===selected.id) return false;
+        const t=new Date(n.date||0).getTime();
+        return Number.isFinite(t) && t>=selectedTime && t-selectedTime<=14*86400000;
+      })
       .map(n=>({n,score:relatedScore(selected,n)}))
-      .filter(x=>x.score>=2)
+      .filter(x=>x.score>=4)
       .sort((a,b)=>b.score-a.score || new Date(b.n.date)-new Date(a.n.date))
-      .slice(0,6).map(x=>x.n);
+      .slice(0,5).map(x=>x.n);
   },[selected,combinedNews]);
 
   const articleDeck=useMemo(()=>{
@@ -775,20 +858,34 @@ function App(){
     setAddMessage(msg); setDraft(null); setAddUrl(''); setAddText(''); setShareGlobal(false);
   };
 
-  const syncPushSubscription=async({enabled=reminderEnabled,time=reminderTime}={})=>{
-    if(typeof Notification==='undefined'||Notification.permission!=='granted'||!('serviceWorker' in navigator)) return false;
+  const syncPushSubscription=async({enabled=reminderEnabled,time=reminderTime,forceRenew=false}={})=>{
+    setPushMessage('');
+    if(typeof Notification==='undefined'){setPushServerStatus('setup');setPushMessage('Notifications non prises en charge sur ce navigateur.');return false;}
+    if(Notification.permission!=='granted'){setPushServerStatus('setup');setPushMessage('Autorise d’abord les notifications.');return false;}
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)){setPushServerStatus('setup');setPushMessage('Push non pris en charge sur cet appareil.');return false;}
     setPushServerStatus('connecting');
     try{
-      const cfg=await fetch(`${PUSH_ENDPOINT}?action=config`,{cache:'no-store'}).then(r=>r.json());
-      if(!cfg?.configured||!cfg?.publicKey){setPushServerStatus('setup');return false;}
+      const cfgResp=await fetch('/api/push-config',{cache:'no-store'});
+      const cfg=await cfgResp.json();
+      if(!cfgResp.ok||!cfg?.configured||!cfg?.publicKey) throw new Error(cfg?.error||'Configuration push indisponible');
       const reg=await navigator.serviceWorker.ready;
       let sub=await reg.pushManager.getSubscription();
-      if(!sub&&enabled) sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.publicKey)});
-      if(!sub){setPushServerStatus('idle');return false;}
-      const r=await fetch(PUSH_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'subscribe',subscription:sub.toJSON(),reminderTime:time,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Brussels',enabled})});
-      if(!r.ok) throw new Error('push backend unavailable');
-      setPushServerStatus(enabled?'active':'idle'); return true;
-    }catch{setPushServerStatus('setup');return false;}
+      if(forceRenew&&sub){try{await sub.unsubscribe()}catch{} sub=null;}
+      if(!sub&&enabled){
+        sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.publicKey)});
+      }
+      if(!sub){setPushServerStatus('idle');setPushMessage('Aucun abonnement push actif.');return false;}
+      const r=await fetch('/api/push-subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON(),reminderTime:time,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Brussels',enabled})});
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(data?.error||'Enregistrement du téléphone impossible');
+      setPushServerStatus(enabled?'active':'idle');
+      setPushMessage(enabled?'Téléphone enregistré pour les rappels serveur.':'Rappel désactivé sur ce téléphone.');
+      return true;
+    }catch(e){
+      setPushServerStatus('setup');
+      setPushMessage(e?.message||'Connexion au push impossible');
+      return false;
+    }
   };
   const requestNotifications=async()=>{
     if(typeof Notification==='undefined'){setNotifStatus('unsupported');return}
@@ -804,24 +901,27 @@ function App(){
   const tutorialPrev=()=>setTutorialStep(i=>Math.max(0,i-1));
 
   const testNotification=async()=>{
-    if(!('Notification' in window)){ setNotifStatus('unsupported'); return; }
+    setPushMessage('');
+    if(!('Notification' in window)){setNotifStatus('unsupported');setPushMessage('Notifications non prises en charge.');return;}
     let permission=Notification.permission;
-    if(permission!=='granted'){ permission=await Notification.requestPermission(); setNotifStatus(permission); }
-    if(permission!=='granted') return;
-    const ok=await syncPushSubscription({enabled:true,time:reminderTime});
+    if(permission!=='granted'){permission=await Notification.requestPermission();setNotifStatus(permission);}
+    if(permission!=='granted'){setPushMessage('Permission de notification refusée.');return;}
+    const ok=await syncPushSubscription({enabled:true,time:reminderTime,forceRenew:true});
     if(!ok) return;
     try{
       const reg=await navigator.serviceWorker.ready;
       const sub=await reg.pushManager.getSubscription();
-      if(!sub) throw new Error('subscription missing');
-      const r=await fetch(PUSH_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'test',subscription:sub.toJSON()})});
-      if(!r.ok) throw new Error('test failed');
+      if(!sub) throw new Error('Abonnement push absent');
+      const r=await fetch('/api/push-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON()})});
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(data?.error||'Échec du test serveur');
       setPushServerStatus('active');
-    }catch{
+      setPushMessage('Notification test envoyée. Elle doit arriver dans quelques secondes.');
+    }catch(e){
       setPushServerStatus('setup');
+      setPushMessage(e?.message||'Échec du test push');
     }
   };
-
   const installApp=async()=>{
     if(!installPrompt) return;
     await installPrompt.prompt();
@@ -842,10 +942,10 @@ function App(){
       {tab==='Accueil'&&<>
         <section className="hero">
           <div><span className="liveBadge"><i/> ACTUALITÉ EN DIRECT</span><h2>Si j’avais un test demain</h2><p>L’app garde la matière depuis le dernier test surprise de Mr Gras et de Mr Leconte.</p><div className="heroMeta"><strong>{relevantNews.length}</strong> actus récupérées depuis la période la plus ancienne · <strong>{sourceStatus.filter(s=>s.ok).length}</strong> sources actives</div></div>
-          <div className="heroActions"><button className="lightBtn" onClick={()=>{setRevisionView('tests');navTo('Révisions');makeQuiz()}}>Faire un test blanc →</button><button className="briefHeroBtn" onClick={()=>setDailyBriefOpen(true)}>Brief d’hier</button></div>
+          <div className="heroActions"><button className="lightBtn" onClick={()=>{setRevisionView('tests');navTo('Révisions');makeQuiz()}}>Faire un test blanc →</button><button className="briefHeroBtn" onClick={()=>{setActusView('hier');navTo('Actus')}}>Actus d’hier</button></div>
         </section>
 
-        <section className="homeRubrics"><div className="sectionTitle"><div><p className="eyebrow">Navigation</p><h2>Mes rubriques</h2></div></div><div className="homeRubricGrid"><button onClick={()=>{setActusView('fil');navTo('Actus')}}><span>◉</span><strong>Actus</strong><small>Fil complet, nécrologie et ajout d’articles</small></button><button onClick={()=>{setRevisionView('menu');navTo('Révisions')}}><span>✓</span><strong>Révisions</strong><small>Entraînements, tests fictifs et mes tests</small></button><button onClick={()=>navTo('Tutoriel')}><span>?</span><strong>Tutoriel</strong><small>Revoir le fonctionnement de l’app</small></button><button onClick={()=>setDailyBriefOpen(true)}><span>☀</span><strong>Brief d’hier</strong><small>Les 5 sujets importants de la veille</small></button></div></section>
+        <section className="homeRubrics"><div className="sectionTitle"><div><p className="eyebrow">Navigation</p><h2>Mes rubriques</h2></div></div><div className="homeRubricGrid"><button onClick={()=>{setActusView('fil');navTo('Actus')}}><span>◉</span><strong>Actus</strong><small>Fil complet, nécrologie et ajout d’articles</small></button><button onClick={()=>{setRevisionView('menu');navTo('Révisions')}}><span>✓</span><strong>Révisions</strong><small>Entraînements, tests fictifs et mes tests</small></button><button onClick={()=>navTo('Tutoriel')}><span>?</span><strong>Tutoriel</strong><small>Revoir le fonctionnement de l’app</small></button><button onClick={()=>{setActusView('hier');navTo('Actus')}}><span>☀</span><strong>Actus d’hier</strong><small>Les 5 sujets réellement importants de la veille</small></button></div></section>
 
         <section><div className="sectionTitle"><div><p className="eyebrow">Périodes automatiques</p><h2>Mes profs</h2></div></div>
           <div className="profGrid">{profs.map(p=><article className="profCard" key={p.key}>
@@ -858,7 +958,7 @@ function App(){
           </article>)}</div>
         </section>
 
-        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Choisis ton heure de rappel et vérifie immédiatement que ton téléphone autorise bien les notifications.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}<button className="secondary" onClick={testNotification}>Tester la notification</button>{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">{pushServerStatus==='active'?'✓ Push serveur actif : le rappel fonctionnera même si l’app est fermée.':pushServerStatus==='connecting'?'Connexion au push serveur…':pushServerStatus==='setup'?'Connexion au serveur push impossible pour le moment.':'Active les notifications puis utilise “Tester la notification”.'}</small></section>
+        <section className="reminderCard"><div><p className="eyebrow">Rappel quotidien</p><h2>Réviser sur téléphone</h2><p>Choisis ton heure de rappel et vérifie immédiatement que ton téléphone autorise bien les notifications.</p></div><div className="reminderControls"><input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)}/>{notifStatus!=='granted'?<button onClick={requestNotifications}>Activer les notifications</button>:<label className="switchLabel"><input type="checkbox" checked={reminderEnabled} onChange={e=>setReminderEnabled(e.target.checked)}/> Rappel actif</label>}<button className="secondary" onClick={testNotification}>Tester la notification</button>{!installed&&installPrompt&&<button className="secondary" onClick={installApp}>Installer l’app</button>}</div><small className="reminderNote">{pushMessage||(pushServerStatus==='active'?'✓ Push serveur actif : le rappel fonctionnera même si l’app est fermée.':pushServerStatus==='connecting'?'Connexion au push serveur…':pushServerStatus==='setup'?'Connexion au serveur push impossible pour le moment.':'Active les notifications puis utilise “Tester la notification”.')}</small></section>
 
         <section><div className="sectionTitle"><div><p className="eyebrow">À surveiller</p><h2>Dernières actualités</h2></div><button className="textBtn" onClick={()=>navTo('Actus')}>Tout voir →</button></div>
           {loading?<Skeleton/>:error?<Empty text={error}/>:<div className="headlineList">{combinedNews.slice(0,7).map((n,i)=><NewsRow key={n.id} n={n} index={i+1} onOpen={()=>openArticle(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>}
@@ -866,7 +966,7 @@ function App(){
       </>}
 
       {tab==='Actus'&&actusView==='fil'&&<section className="noTop">
-        <div className="subTabs"><button className="active" onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
+        <div className="subTabs actusSubTabs"><button className="active" onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
         <div className="toolbar"><div className="search"><span>⌕</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Rechercher un sujet, une personne, un média…"/></div><select value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c}>{c}</option>)}</select></div>
         <div className="periodFilter">
           <div className="periodFilterText"><span>Afficher l’actualité</span><strong>{filterSince?`depuis le ${fmt(filterSince,true)}`:'sans limite de date'}</strong></div>
@@ -883,14 +983,21 @@ function App(){
         {loading?<Skeleton/>:error?<Empty text={error}/>:filtered.length===0?<Empty text="Aucune actualité trouvée pour cette période."/>:<><div className="newsGrid">{filtered.slice(0,visibleLimit).map(n=><NewsCard key={n.id} n={n} onOpen={()=>openArticle(n)} saved={saved.includes(n.id)} onSave={()=>toggleSaved(n.id)}/>)}</div>{filtered.length>visibleLimit&&<div className="loadMoreWrap"><button className="loadMoreBtn" onClick={()=>setVisibleLimit(v=>Math.min(v+60,filtered.length))}>Afficher 60 actus de plus <span>{visibleLimit} / {filtered.length}</span></button></div>}</>}
       </section>}
 
+      {tab==='Actus'&&actusView==='hier'&&<section className="noTop yesterdayPage">
+        <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button className="active" onClick={()=>setActusView('hier')}>Actus d’hier</button><button onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
+        <div className="yesterdayHero"><div><p className="eyebrow">Synthèse quotidienne</p><h2>Les actus importantes d’hier</h2><p>Les articles de la veille sont regroupés par sujet pour éviter les doublons et faire ressortir les 5 informations à retenir.</p></div><div className="yesterdayStats"><strong>{dailyBrief.total}</strong><span>articles analysés</span><strong>{dailyBrief.topics}</strong><span>sujets regroupés</span></div></div>
+        {dailyBrief.points.length?<div className="yesterdayBriefList">{dailyBrief.points.map((point,i)=><article className="yesterdayBriefCard" key={point.id}><div className="yesterdayRank">{String(i+1).padStart(2,'0')}</div><div className="yesterdayBriefBody"><div className="yesterdayBriefMeta"><span>{point.count} article{point.count>1?'s':''}</span><span>{point.sources.length} média{point.sources.length>1?'s':''}</span></div><h3>{point.title}</h3><p>{point.summary}</p><div className="yesterdaySources">{point.sources.map(s=><span key={s}>{s}</span>)}</div><div className="yesterdayActions"><button className="textBtn left" onClick={()=>openArticle(point.item)}>Voir la fiche principale →</button>{point.articles?.length>1&&<details><summary>Voir les {point.articles.length} articles regroupés</summary><div className="yesterdayArticleLinks">{point.articles.map(a=><button key={a.id} className="textBtn left" onClick={()=>openArticle(a)}>{a.source} · {fmtNews(a.date)} — {a.title}</button>)}</div></details>}</div></div></article>)}</div>:<Empty text="Je n’ai pas encore assez d’articles datés d’hier pour construire une synthèse fiable."/>}
+      </section>}
+
       {tab==='Actus'&&actusView==='necrologie'&&<section className="noTop">
-        <div className="subTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
+        <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
         <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une fiche courte pour retenir qui est décédé, qui était la personne et la cause du décès uniquement lorsqu’elle est explicitement mentionnée par une source. Les cartes sans photo exploitable ne sont pas affichées.</p></div></div>
-        {loading?<Skeleton/>:obituaryNews.length===0?<Empty text="Aucune nécrologie avec photo exploitable n’a encore été récupérée."/>:<div className="necrologyGrid">{obituaryNews.slice(0,80).map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
+        <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''}`:''}</span></div>
+        {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text="Aucune personnalité avec photo et source exploitable trouvée pour le moment."/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}
 
       {tab==='Actus'&&actusView==='ajouter'&&<section className="noTop">
-        <div className="subTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('necrologie')}>Nécrologie</button><button className="active" onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
+        <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button onClick={()=>setActusView('necrologie')}>Nécrologie</button><button className="active" onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
         <div className="revisionIntro"><div><p className="eyebrow">Ajout manuel</p><h2>Ajouter une actualité</h2><p>Colle un lien : l’app récupère ce qui est publiquement accessible, résume, classe et ajoute l’info à tes révisions. Pour un article réservé aux abonnés, colle aussi le texte auquel tu as accès.</p></div></div>
         <div className="addGrid">
           <article className="addCard"><label>Lien de l’article</label><input type="url" value={addUrl} onChange={e=>setAddUrl(e.target.value)} placeholder="https://…"/><label>Texte de l’article <span>(optionnel — utile pour un paywall)</span></label><textarea value={addText} onChange={e=>setAddText(e.target.value)} placeholder="Si tu es abonné, tu peux coller ici le texte de l’article pour que l’app l’analyse sans contourner le paywall."/><button className="submit" disabled={!addUrl.trim()||analyzing} onClick={analyzeLink}>{analyzing?'Analyse en cours…':'Analyser le lien'}</button>{addMessage&&<p className="statusMsg">{addMessage}</p>}</article>
@@ -948,7 +1055,7 @@ function App(){
       </section>}
     </main>
 
-    {dailyPromptOpen&&<div className="briefPromptBack" role="dialog" aria-modal="true" aria-label="Résumé de l’actualité de la veille"><article className="briefPrompt"><span className="briefPromptIcon">☀</span><p className="eyebrow">Une fois par jour</p><h2>Un résumé de l’actu de la veille ?</h2><p>J’ai regroupé les articles d’hier par sujet pour te sortir les points les plus importants.</p><div className="briefPromptMeta"><strong>{dailyBrief.total}</strong> articles analysés · <strong>{dailyBrief.topics}</strong> sujets regroupés</div><div className="briefPromptActions"><button className="secondary" onClick={()=>setDailyPromptOpen(false)}>Pas aujourd’hui</button><button className="submit" onClick={()=>{setDailyPromptOpen(false);setDailyBriefOpen(true)}}>Voir les 5 points →</button></div></article></div>}
+    {dailyPromptOpen&&<div className="briefPromptBack" role="dialog" aria-modal="true" aria-label="Résumé de l’actualité de la veille"><article className="briefPrompt"><span className="briefPromptIcon">☀</span><p className="eyebrow">Une fois par jour</p><h2>Un résumé de l’actu de la veille ?</h2><p>J’ai regroupé les articles d’hier par sujet pour te sortir les points les plus importants.</p><div className="briefPromptMeta"><strong>{dailyBrief.total}</strong> articles analysés · <strong>{dailyBrief.topics}</strong> sujets regroupés</div><div className="briefPromptActions"><button className="secondary" onClick={()=>setDailyPromptOpen(false)}>Pas aujourd’hui</button><button className="submit" onClick={()=>{setDailyPromptOpen(false);setActusView('hier');navTo('Actus')}}>Voir les 5 points →</button></div></article></div>}
     {dailyBriefOpen&&<div className="briefBack" role="dialog" aria-modal="true" aria-label="Brief de la veille"><article className="briefModal"><button className="close" onClick={()=>setDailyBriefOpen(false)}>×</button><p className="eyebrow">Brief de la veille</p><h2>Les 5 points importants</h2><p className="briefLead">{dailyBrief.total?`${dailyBrief.total} articles publiés hier ont été regroupés en ${dailyBrief.topics} sujets.`:'Je n’ai pas encore assez d’articles datés d’hier pour construire le brief.'}</p>{dailyBrief.points.length?<div className="briefPoints">{dailyBrief.points.map((point,i)=><article className="briefPoint" key={point.id}><span>{String(i+1).padStart(2,'0')}</span><div><h3>{point.title}</h3><p>{point.summary}</p><small>{point.sources.join(' · ')}</small><button className="textBtn left" onClick={()=>{setDailyBriefOpen(false);setSelected(point.item)}}>Voir la fiche →</button></div></article>)}</div>:<Empty text="Aucun sujet majeur n’a pu être regroupé pour hier."/>}<div className="briefFooter"><button className="secondary" onClick={()=>setDailyBriefOpen(false)}>Fermer</button><button className="submit" onClick={()=>{setDailyBriefOpen(false);setActusView('fil');navTo('Actus')}}>Voir toutes les actus →</button></div></article></div>}
     {tutorialOpen&&<div className="tutorialBack" role="dialog" aria-modal="true" aria-label="Tutoriel IHECS Test Actus"><article className="tutorialModal"><div className="tutorialModalTop"><div><span className="tutorialStepCount">{tutorialStep+1} / {tutorialSteps.length}</span><div className="tutorialDots">{tutorialSteps.map((_,i)=><i key={i} className={i<=tutorialStep?'active':''}/>)}</div></div><button className="tutorialSkip" onClick={closeTutorial}>Passer</button></div><div className="tutorialVisual"><span>{nav.find(n=>n[0]===tutorialSteps[tutorialStep].tab)?.[1]||'•'}</span></div><p className="eyebrow">Présentation de l’app</p><h2>{tutorialSteps[tutorialStep].title}</h2><p className="tutorialText">{tutorialSteps[tutorialStep].text}</p><div className="tutorialActions">{tutorialStep>0?<button className="secondary" onClick={tutorialPrev}>← Précédent</button>:<span/>}<button className="secondary" onClick={()=>{navTo(tutorialSteps[tutorialStep].tab);setTutorialOpen(false)}}>Voir cette section</button><button className="submit" onClick={tutorialNext}>{tutorialStep===tutorialSteps.length-1?'Terminer':'Suivant →'}</button></div></article></div>}
 
@@ -980,13 +1087,43 @@ function SmartImage({item,className='',alt='',fallback=null}){
 
 
 function ObituaryCard({item,onOpen}){
-  const [src,setSrc]=useState(item?.image||'');
-  const [checked,setChecked]=useState(!!item?.image);
-  useEffect(()=>{let alive=true;setSrc(item?.image||'');setChecked(!!item?.image);if(item?.image||!item?.url)return()=>{alive=false};fetch(`/api/article-image?url=${encodeURIComponent(item.url)}`).then(r=>r.ok?r.json():null).then(d=>{if(!alive)return;if(d?.image)setSrc(d.image);setChecked(true)}).catch(()=>{if(alive)setChecked(true)});return()=>{alive=false}},[item?.image,item?.url]);
-  if(!checked&&!src) return null;
-  if(!src) return null;
   const info=obituaryInfo(item);
-  return <article className="obituaryCard"><img src={src} alt={`Photo de ${info.person}`} loading="lazy" referrerPolicy="no-referrer" onError={()=>setSrc('')}/><div className="obituaryBody"><div className="cardMeta"><span>{item.source}</span><span>{fmtNews(item.date)}</span></div><h3>{info.person}</h3><div className="obituaryFact"><span>Qui c’était</span><p>{info.who}</p></div><div className="obituaryFact"><span>Décès</span><p>{info.cause}</p></div><div className="obituaryActions"><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button><a href={item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div></article>
+  const [src,setSrc]=useState(item?.image||'');
+  const [state,setState]=useState(item?.image?'ready':'loading');
+  useEffect(()=>{
+    let alive=true;
+    setSrc(item?.image||'');
+    setState(item?.image?'ready':'loading');
+    if(item?.image) return ()=>{alive=false};
+    const resolve=async()=>{
+      let found='';
+      if(item?.url){
+        try{
+          const r=await fetch(`/api/article-image?url=${encodeURIComponent(item.url)}`);
+          const d=r.ok?await r.json():null;
+          found=d?.image||'';
+        }catch{}
+      }
+      if(!found && info.person && info.person!=='Personnalité décédée'){
+        try{
+          const r=await fetch(`/api/person-image?name=${encodeURIComponent(info.person)}`);
+          const d=r.ok?await r.json():null;
+          found=d?.image||'';
+        }catch{}
+      }
+      if(!alive) return;
+      setSrc(found);
+      setState(found?'ready':'missing');
+    };
+    resolve();
+    return()=>{alive=false};
+  },[item?.image,item?.url,info.person]);
+
+  if(state==='missing') return null;
+  return <article className={`obituaryCard ${state==='loading'?'obituaryLoading':''}`}>
+    {state==='loading'?<div className="obituaryPhotoSkeleton"><span>Recherche de la photo…</span></div>:<img src={src} alt={`Photo de ${info.person}`} loading="lazy" referrerPolicy="no-referrer" onError={()=>{setSrc('');setState('missing')}}/>}
+    <div className="obituaryBody"><div className="cardMeta"><span>{item.source}</span><span>{fmtNews(item.date)}</span></div><h3>{info.person}</h3><div className="obituaryFact"><span>Qui c’était</span><p>{info.who}</p></div><div className="obituaryFact"><span>Décès</span><p>{info.cause}</p></div><div className="obituaryActions"><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button><a href={item.url} target="_blank" rel="noreferrer">Article source ↗</a></div></div>
+  </article>
 }
 
 function NewsRow({n,index,onOpen,saved,onSave}){return <article className="headline"><span className="rank">{String(index).padStart(2,'0')}</span><div className="headlineBody" onClick={onOpen}><div className="meta"><b>{n.source}</b><span>{n.category}</span><span>{fmtNews(n.date)}</span></div><h3>{n.title}</h3></div><button className="saveBtn" onClick={onSave}>{saved?'★':'☆'}</button></article>}
