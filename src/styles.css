@@ -274,3 +274,18 @@
 
 /* v5.7 — sport condensé */
 .yesterdayBriefCard p{white-space:normal}
+
+/* v5.8 — profils nécrologiques enrichis */
+.obituaryIdentityLine{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 13px}
+.obituaryIdentityLine span{background:#f0ede6;border:1px solid #e3ded5;border-radius:999px;padding:6px 9px;font-size:11px;font-weight:750;color:#514c45}
+.obituaryProfileGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 12px}
+.obituaryProfileItem{background:#f7f5f0;border:1px solid #e8e3da;border-radius:9px;padding:10px 11px;min-width:0}
+.obituaryProfileItem span{display:block;font-size:8px;letter-spacing:.11em;text-transform:uppercase;color:#9a1f32;font-weight:850;margin-bottom:4px}
+.obituaryProfileItem strong{display:block;font-size:12px;line-height:1.38;color:#292622;overflow-wrap:anywhere}
+.obituaryPoliticalNote{font-size:10px!important;line-height:1.45!important;color:#8a837a!important;margin:7px 0 0!important}
+@media(max-width:720px){
+  .obituaryProfileGrid{grid-template-columns:1fr 1fr}
+  .obituaryProfileItem{padding:9px}
+  .obituaryProfileItem strong{font-size:11px}
+}
+@media(max-width:390px){.obituaryProfileGrid{grid-template-columns:1fr}}

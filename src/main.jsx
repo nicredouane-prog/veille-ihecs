@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v5.7';
+const APP_VERSION='v5.8';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -1054,7 +1054,7 @@ function App(){
 
       {tab==='Actus'&&actusView==='necrologie'&&<section className="noTop">
         <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
-        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une seule fiche par personnalité : photo vérifiée de la personne, qui elle était, ce que les sources disent du décès et les articles qui en parlent. Si l’identité ou la photo ne peut pas être vérifiée, la fiche n’est pas affichée.</p></div></div>
+        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une seule fiche par personnalité, avec photo vérifiée et profil adapté : cinéma, sport, politique ou autre domaine. L’app vérifie aussi que la personne est bien décédée avant de l’afficher.</p></div></div>
         <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''}`:''}</span></div>
         {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text="Aucune personnalité avec photo et source exploitable trouvée pour le moment."/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}
@@ -1151,16 +1151,23 @@ function SmartImage({item,className='',alt='',fallback=null}){
 
 function ObituaryCard({item,onOpen}){
   const sources=Array.isArray(item.sources)?item.sources:[];
+  const details=Array.isArray(item.details)?item.details.filter(x=>x?.value):[];
   if(!item?.image||!item?.person) return null;
   return <article className="obituaryCard obituaryVerified">
     <img src={item.image} alt={`Photo de ${item.person}`} loading="lazy" referrerPolicy="no-referrer"/>
     <div className="obituaryBody">
-      <div className="cardMeta"><span>{sources.length>1?`${sources.length} sources`:item.source}</span><span>{fmtNews(item.date)}</span></div>
+      <div className="cardMeta"><span>{item.profileLabel||'Personnalité'}</span><span>{sources.length>1?`${sources.length} sources`:item.source}</span><span>{fmtNews(item.date)}</span></div>
       <h3>{item.person}</h3>
-      {item.age&&<div className="obituaryAge">Décédé{item.gender==='female'?'e':''} à {item.age} ans</div>}
+      <div className="obituaryIdentityLine">
+        {item.age&&<span>{item.age} ans</span>}
+        {item.country&&<span>{item.country}</span>}
+        {item.occupationShort&&<span>{item.occupationShort}</span>}
+      </div>
+      {details.length>0&&<div className="obituaryProfileGrid">{details.slice(0,5).map((d,i)=><div className="obituaryProfileItem" key={`${d.label}-${i}`}><span>{d.label}</span><strong>{d.value}</strong></div>)}</div>}
       <div className="obituaryFact"><span>Qui c’était</span><p>{item.who}</p></div>
       <div className="obituaryFact"><span>Ce qu’on sait du décès</span><p>{item.cause}</p></div>
-      {sources.length>1&&<div className="obituarySources">{sources.slice(0,4).map(s=><a key={`${s.source}-${s.url}`} href={s.url} target="_blank" rel="noreferrer">{s.source} ↗</a>)}</div>}
+      {item.profileType==='politics'&&item.politicalNote&&<p className="obituaryPoliticalNote">{item.politicalNote}</p>}
+      {sources.length>0&&<div className="obituarySources">{sources.slice(0,5).map(s=><a key={`${s.source}-${s.url}`} href={s.url} target="_blank" rel="noreferrer">{s.source} ↗</a>)}</div>}
       <div className="obituaryActions"><button className="textBtn left" onClick={onOpen}>Voir la fiche →</button><a href={item.url} target="_blank" rel="noreferrer">Article principal ↗</a></div>
     </div>
   </article>
