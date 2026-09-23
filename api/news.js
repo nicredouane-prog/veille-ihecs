@@ -17,6 +17,7 @@ const attr=(xml,tagName,attrName)=>{const m=xml.match(new RegExp(`<${tagName}[^>
 
 function categoryFor(text=''){
   const t=text.toLowerCase();
+  if(/\b(décès|deces|mort de|est mort|est morte|est décédé|est décédée|s['’]est éteint|s['’]est éteinte|disparition de|nous a quittés|meurt à|décède à)\b/.test(t)) return 'Nécrologie';
   if(/gouvernement|ministre|parlement|élection|parti|coalition|président|premier ministre|député|sénat|commission européenne|diplomat/.test(t)) return 'Politique';
   if(/guerre|ukraine|gaza|israël|otan|onu|international|chine|états-unis|russie|iran|moyen-orient|europe/.test(t)) return 'International';
   if(/euro|budget|inflation|banque|entreprise|emploi|économie|marché|prix|salaire|finance|bourse|énergie/.test(t)) return 'Économie';
@@ -100,6 +101,10 @@ export default async function handler(req,res){
       if(ranges.length){ for(const [after,before] of ranges) urls.push(googleUrl(q,days,after,before)); }
       else urls.push(googleUrl(q,days,requestedSince));
     }
+    // Une recherche ciblée complète le flux général pour ne pas rater les décès de personnalités.
+    // On la garde à une seule requête par média afin de ne pas alourdir excessivement le rafraîchissement.
+    const deathBase=source.queries[0]||`"${source.name}"`;
+    urls.push(googleUrl(`${deathBase} (décès OR "est mort" OR "est décédé" OR "s'est éteint")`,days,requestedSince));
     const settled=await Promise.allSettled(urls.map(async url=>parseFeed(await fetchText(url),source.name)));
     const feeds=[];
     settled.forEach(r=>{if(r.status==='fulfilled') feeds.push(...r.value); else errors.push(r.reason?.message||'Erreur flux')});

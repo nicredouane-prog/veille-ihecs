@@ -1,0 +1,5 @@
+IHECS Test Actus v5.0
+Push backend: Supabase project tndwtppmemjgsoohubuz
+Edge Function: ihecs-push
+Cron: ihecs-push-dispatch (every minute)
+No Vercel environment variables are required for push.
