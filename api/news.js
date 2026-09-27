@@ -41,6 +41,25 @@ function headlineSummary(title='',category=''){
   t=t.replace(/^[\"'“][^\"'”]{5,140}[\"'”]\s*[:–—-]\s*/,'').trim()||t;
   return ensurePeriod(t.charAt(0).toUpperCase()+t.slice(1));
 }
+
+function sportKind(title=''){
+  const t=(title||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  if(/[?？]$/.test((title||'').trim()) || /\b(comment|pourquoi|faut-il|peut-il|conseil|guide|bienfait|alli[eé]|progresser|am[eé]liorer|entra[iî]nement|pratique|risque|r[eé]cup[eé]ration|nutrition)\b/.test(t)) return 'explainer';
+  if(/\b(mercato|transfert|signe|rejoint|quitte|prolonge|contrat)\b/.test(t)) return 'transfer';
+  if(/\b(blessure|bless[eé]|forfait|indisponible|op[eé]ration|retour)\b/.test(t)) return 'injury';
+  if(/\b\d{1,2}\s*[-–]\s*\d{1,2}\b/.test(title||'') || /\b(remporte|gagne|bat|s'impose|[eé]limine|qualifie|termine|finit|sacre|vainqueur|victoire|d[eé]faite|podium)\b/.test(t)) return 'result';
+  return 'news';
+}
+function sportSummary(title=''){
+  const kind=sportKind(title);
+  let clean=(title||'').replace(/\s+/g,' ').trim();
+  if(kind==='explainer'){
+    const q=clean.replace(/[?？]+$/,'');
+    if(/^le crossfit,?\s+un alli[eé]/i.test(q)) return "L’article s’interroge sur l’intérêt du CrossFit comme complément pour progresser dans d’autres pratiques sportives.";
+    return `L’article analyse la question suivante : ${q.charAt(0).toLowerCase()+q.slice(1)}.`;
+  }
+  return headlineSummary(clean,'Sport');
+}
 function contextSentence(category='',title=''){
   const t=(title||'').toLowerCase();
   if(/iran|ormuz|moyen-orient|guerre|isra[eë]l|gaza|ukraine|russie/.test(t)) return "L’enjeu concerne aussi les rapports de force internationaux, la sécurité et les conséquences diplomatiques ou économiques.";
@@ -48,7 +67,14 @@ function contextSentence(category='',title=''){
   if(/gr[eè]ve|a[eé]roport|skeyes|transport|train|sncb/.test(t)) return "Il faut surtout retenir l’origine de la perturbation, les acteurs concernés et son impact concret.";
   if(/prix|festival|film|cin[eé]ma|r[eé]compense|remporte|gagne/.test(t)||category==='Culture') return "Il faut retenir l’œuvre ou la personne concernée, la distinction ou l’événement culturel et pourquoi il fait l’actualité.";
   if(category==='Économie') return "Le point important est l’acteur économique concerné, l’évolution annoncée et son impact potentiel.";
-  if(category==='Sport') return "À retenir : le résultat ou l’annonce principale, les sportifs ou équipes concernés et la compétition ou l’enjeu si c’est utile.";
+  if(category==='Sport'){
+    const kind=sportKind(title);
+    if(kind==='explainer') return "Il s’agit d’un article explicatif, pas d’un résultat : retiens la question traitée, les arguments avancés et les éventuelles limites ou conditions.";
+    if(kind==='transfer') return "À retenir : le joueur ou l’entraîneur concerné, les clubs impliqués et la nature du mouvement annoncé.";
+    if(kind==='injury') return "À retenir : la personne concernée, la nature de l’indisponibilité et les conséquences sur les prochaines échéances.";
+    if(kind==='result') return "À retenir : le résultat, les protagonistes et la compétition ou l’étape concernée.";
+    return "À retenir : le fait sportif principal, les personnes ou équipes concernées et pourquoi cette information fait l’actualité.";
+  }
   if(category==='Sciences') return "Le point important est ce qui a été annoncé ou découvert, par qui, et ce que cela change.";
   return "Le point essentiel est le fait principal, les acteurs concernés et la raison pour laquelle l’événement compte.";
 }
@@ -62,7 +88,7 @@ function parseFeed(xml, configuredSource){
     const pubDateRaw=tag(item,'pubDate')||tag(item,'dc:date');
     const date=pubDateRaw?new Date(pubDateRaw):new Date();
     const enclosure=attr(item,'enclosure','url')||attr(item,'media:content','url')||attr(item,'media:thumbnail','url');
-    const category=categoryFor(`${title} ${description}`); const summaryShort=headlineSummary(title,category); const summaryLong=[summaryShort,contextSentence(category,title)].filter(Boolean).join(' '); return {id:`${configuredSource}-${date.getTime()}-${index}-${title.slice(0,24)}`,title,source:configuredSource,url:strip(tag(item,'link')),description:description.slice(0,650),summaryShort,summaryLong,image:enclosure,date:Number.isNaN(date.getTime())?new Date().toISOString():date.toISOString(),category};
+    const category=categoryFor(`${title} ${description}`); const summaryShort=category==='Sport'?sportSummary(title):headlineSummary(title,category); const summaryLong=[summaryShort,contextSentence(category,title)].filter(Boolean).join(' '); return {id:`${configuredSource}-${date.getTime()}-${index}-${title.slice(0,24)}`,title,source:configuredSource,url:strip(tag(item,'link')),description:description.slice(0,650),summaryShort,summaryLong,image:enclosure,date:Number.isNaN(date.getTime())?new Date().toISOString():date.toISOString(),category};
   }).filter(x=>x.title&&x.url);
 }
 

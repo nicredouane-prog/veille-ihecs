@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v6.1';
+const APP_VERSION='v6.3';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -67,18 +67,45 @@ function contextSentence(category='',title=''){
   return "Pour comprendre cette actualité, retiens le fait principal, les acteurs concernés et la raison pour laquelle l’événement est important.";
 }
 
+function sportArticleKind(title=''){
+  const t=normalizeTopicText(title);
+  if(/[?？]$/.test((title||'').trim()) || /\b(comment|pourquoi|faut il|peut il|peut elle|conseil|guide|bienfait|utile|allie|progresser|ameliorer|entrainement|pratique|risque|nutrition|recuperation|preparation)\b/.test(t)) return 'explainer';
+  if(/\b(mercato|transfert|signe|rejoint|quitte|prolonge|contrat)\b/.test(t)) return 'transfer';
+  if(/\b(blessure|blesse|forfait|indisponible|operation|retour)\b/.test(t)) return 'injury';
+  if(/\b(selection|selectionne|convoque|liste|equipe nationale)\b/.test(t)) return 'selection';
+  if(/\b\d{1,2}\s*[-–]\s*\d{1,2}\b/.test(title||'') || /\b(remporte|gagne|bat|s impose|elimine|qualifie|termine|finit|sacre|vainqueur|victoire|defaite|podium)\b/.test(t)) return 'result';
+  return 'news';
+}
+function sportExplainerSummary(title=''){
+  let t=cleanBriefTitle(title).replace(/\s+/g,' ').trim().replace(/[?？]+$/,'');
+  if(!t) return '';
+  if(/^le crossfit,?\s+un alli[eé]/i.test(t)) return "L’article s’interroge sur l’intérêt du CrossFit comme complément pour progresser dans d’autres pratiques sportives.";
+  if(/^comment\s+/i.test(t)) return ensurePeriod(`L’article explique ${t.charAt(0).toLowerCase()+t.slice(1)}`);
+  if(/^pourquoi\s+/i.test(t)) return ensurePeriod(`L’article cherche à expliquer ${t.charAt(0).toLowerCase()+t.slice(1)}`);
+  return ensurePeriod(`L’article analyse la question suivante : ${t.charAt(0).toLowerCase()+t.slice(1)}`);
+}
 function sportCompactSummary(item){
   const title=cleanBriefTitle(item?.title||'').replace(/\s+/g,' ').trim();
   if(!title) return '';
-  const score=title.match(/\b\d{1,2}\s*[-–]\s*\d{1,2}\b/);
-  const resultVerb=title.match(/\b(remporte|gagne|bat|s'impose|s’impose|élimine|qualifie|battu|défait|termine|finit|sacre|sacré|sacrée|vainqueur|victoire|défaite)\b/i);
-  if(score||resultVerb) return ensurePeriod(title);
+  const kind=sportArticleKind(title);
+  if(kind==='explainer') return sportExplainerSummary(title);
   return ensurePeriod(title.length>150?title.slice(0,147).replace(/\s+\S*$/,'')+'…':title);
+}
+function sportLongSummary(item){
+  const title=cleanBriefTitle(item?.title||'').replace(/\s+/g,' ').trim();
+  const short=sportCompactSummary(item)||item.summaryShort||headlineSummary(title,item.category)||item.description||'';
+  const kind=sportArticleKind(title);
+  if(kind==='explainer') return `${short} Il s’agit d’un article explicatif, pas d’un résultat de compétition : retiens surtout la question traitée, les arguments avancés et les éventuelles limites ou conditions évoquées dans l’article.`;
+  if(kind==='transfer') return `${short} Pour réviser, retiens le joueur ou l’entraîneur concerné, le club de départ ou d’arrivée et la nature du mouvement annoncé.`;
+  if(kind==='injury') return `${short} Pour réviser, retiens la personne concernée, la nature de l’indisponibilité et les conséquences annoncées pour les prochaines échéances.`;
+  if(kind==='selection') return `${short} Pour réviser, retiens la sélection concernée, les joueurs appelés ou absents et l’échéance sportive associée.`;
+  if(kind==='result') return `${short} Pour réviser, retiens le résultat, les protagonistes et la compétition ou l’étape concernée.`;
+  return `${short} Pour réviser, retiens le fait sportif principal, les personnes ou équipes concernées et pourquoi cette information fait l’actualité.`;
 }
 function displaySummaries(item){
   if(item?.category==='Sport'){
     const short=sportCompactSummary(item)||item.summaryShort||headlineSummary(item.title,item.category)||item.description||'';
-    const long=[short,"À retenir : le résultat ou l’annonce principale, les équipes ou sportifs concernés et, si c’est pertinent, la compétition ou l’enjeu."].filter(Boolean).join(' ');
+    const long=sportLongSummary(item);
     return {short,long};
   }
   const short=item.summaryShort||headlineSummary(item.title,item.category)||item.description||'';
@@ -1283,7 +1310,7 @@ function App(){
 
       {tab==='Actus'&&actusView==='necrologie'&&<section className="noTop">
         <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
-        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Les décès récents sont repérés à partir de bases de référence puis reliés à des articles de presse. Une seule fiche par personnalité, avec photo, âge et profil adapté : cinéma, sport, politique ou autre domaine.</p></div></div>
+        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Les décès récents sont croisés entre la presse et les listes de référence. Une seule fiche par personnalité, avec photo, âge, profil adapté et lien vers l’article qui en parle.</p></div></div>
         <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''} récente${obituaries.length>1?'s':''}`:''}</span></div>
         {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text={obitStats?.candidates?`${obitStats.candidates} articles de décès ont été analysés, mais aucune fiche n’a encore pu être validée. Appuie sur “Actualiser la nécrologie”.`:"Aucune personnalité avec photo et source exploitable trouvée pour le moment."}/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}

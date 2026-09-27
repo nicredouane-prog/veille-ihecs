@@ -37,7 +37,12 @@ function revisionContext(category,title=''){
   if(category==='Politique') return "Pour le test, retiens les acteurs politiques concernés, la décision ou l’évolution annoncée et ses conséquences.";
   if(category==='Culture') return "Pour le test, retiens l’œuvre ou la personne concernée, l’événement ou la récompense et la raison de sa présence dans l’actualité.";
   if(category==='Économie') return "Pour le test, retiens l’acteur économique, ce qui change et l’impact attendu.";
-  if(category==='Sport') return "Pour le test, retiens l’événement, les protagonistes et le résultat ou l’enjeu principal.";
+  if(category==='Sport'){
+    const q=/[?？]$/.test((title||'').trim())||/\b(comment|pourquoi|faut-il|peut-il|conseil|guide|bienfait|alli[eé]|progresser|entra[iî]nement|pratique)\b/i.test(title||'');
+    return q
+      ? "Il s’agit d’un article explicatif : retiens la question traitée, les arguments avancés et les éventuelles limites ou conditions."
+      : "Pour le test, retiens le fait sportif principal, les protagonistes et, s’il y en a un, le résultat ou l’enjeu.";
+  }
   if(category==='Sciences') return "Pour le test, retiens ce qui a été annoncé ou découvert, l’acteur à l’origine et ce que cela change.";
   return "Pour le test, retiens le fait principal, les acteurs concernés et ce que cette actualité change concrètement.";
 }
