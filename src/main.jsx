@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v6.0';
+const APP_VERSION='v6.1';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
@@ -1283,8 +1283,8 @@ function App(){
 
       {tab==='Actus'&&actusView==='necrologie'&&<section className="noTop">
         <div className="subTabs actusSubTabs"><button onClick={()=>setActusView('fil')}>Fil d’actu</button><button onClick={()=>setActusView('hier')}>Actus d’hier</button><button className="active" onClick={()=>setActusView('necrologie')}>Nécrologie</button><button onClick={()=>setActusView('ajouter')}>＋ Ajouter</button></div>
-        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Une seule fiche par personnalité, avec photo vérifiée et profil adapté : cinéma, sport, politique ou autre domaine. L’app vérifie aussi que la personne est bien décédée avant de l’afficher.</p></div></div>
-        <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''}`:''}</span></div>
+        <div className="necrologyIntro"><div><p className="eyebrow">Personnalités disparues</p><h2>Nécrologie</h2><p>Les décès récents sont repérés à partir de bases de référence puis reliés à des articles de presse. Une seule fiche par personnalité, avec photo, âge et profil adapté : cinéma, sport, politique ou autre domaine.</p></div></div>
+        <div className="necrologyToolbar"><button className="secondary" onClick={loadObituaries} disabled={obitLoading}>{obitLoading?'Recherche…':'↻ Actualiser la nécrologie'}</button><span>{obituaries.length?`${obituaries.length} personnalité${obituaries.length>1?'s':''} récente${obituaries.length>1?'s':''}`:''}</span></div>
         {obitLoading?<Skeleton/>:obitError?<Empty text={obitError}/>:obituaries.length===0?<Empty text={obitStats?.candidates?`${obitStats.candidates} articles de décès ont été analysés, mais aucune fiche n’a encore pu être validée. Appuie sur “Actualiser la nécrologie”.`:"Aucune personnalité avec photo et source exploitable trouvée pour le moment."}/>:<div className="necrologyGrid">{obituaries.map(n=><ObituaryCard key={n.id} item={n} onOpen={()=>openArticle(n)}/>)}</div>}
       </section>}
 
