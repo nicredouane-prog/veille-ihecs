@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const APP_VERSION='v6.3';
+const APP_VERSION='v6.4';
 const PUSH_ENDPOINT='https://tndwtppmemjgsoohubuz.supabase.co/functions/v1/ihecs-push';
 const fmt = (value, short=false) => new Intl.DateTimeFormat('fr-BE', short ? {day:'2-digit',month:'short'} : {day:'2-digit',month:'long',year:'numeric'}).format(new Date(value));
 const fmtNews = value => {
